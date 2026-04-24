@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 from collections import deque
+import argparse
 import math
 import random
 
@@ -592,6 +593,171 @@ def _mcts_ghost_move(state, max_depth=8, iterations=200, exploration_constant=1.
     return best_child.move
 
 
+def _step_game_state(state, minimax_depth, ghost_mcts_depth, ghost_mcts_iterations):
+    """Advance the game by exactly one turn and return transition metadata."""
+    if state.game_end:
+        return state, {"actor": None, "move": None, "distance": None}
+
+    if state.turn == "HERO":
+        best_move, _ = minimax_hero_move(state, minimax_depth)
+        hero_distance = get_next_move("HERO")
+        next_ghost_distance = _distance_for_turn("GHOST1", 0)
+        next_state = move_hero(state, best_move, next_ghost_distance)
+        return next_state, {
+            "actor": "HERO",
+            "move": list(best_move),
+            "distance": hero_distance,
+        }
+
+    ghost_distance = _distance_for_turn("GHOST1", 0)
+    ghost_move = _mcts_ghost_move(
+        state,
+        max_depth=ghost_mcts_depth,
+        iterations=ghost_mcts_iterations,
+    )
+    _ = get_next_move("GHOST1")
+    next_hero_distance = _distance_for_turn("HERO", 0)
+    next_state = move_ghost(state, ghost_move, next_hero_distance)
+    return next_state, {
+        "actor": "GHOST",
+        "move": list(ghost_move),
+        "distance": ghost_distance,
+    }
+
+
+def _serialize_state(state, turn_count, stopped_by_user=False, last_transition=None):
+    update_maze_from_state(state)
+    return {
+        "maze_layout": maze_layout,
+        "hero": list(state.hero),
+        "ghosts": [list(g) for g in state.ghosts],
+        "turn": state.turn,
+        "game_end": state.game_end,
+        "winner": state.winner,
+        "dots_remaining": len(state.dots),
+        "hero_heuristic": heroistics(state),
+        "ghost_heuristic": ghost_heuristic(state),
+        "turn_count": turn_count,
+        "stopped_by_user": stopped_by_user,
+        "last_transition": last_transition,
+    }
+
+
+backend_session = {
+    "state": None,
+    "turn_count": 0,
+    "stopped_by_user": False,
+    "minimax_depth": 4,
+    "ghost_mcts_depth": 8,
+    "ghost_mcts_iterations": 200,
+    "last_transition": None,
+}
+
+
+def _reset_backend_session(minimax_depth=4, ghost_mcts_depth=8, ghost_mcts_iterations=200):
+    backend_session["state"] = initialize_game()
+    backend_session["turn_count"] = 0
+    backend_session["stopped_by_user"] = False
+    backend_session["minimax_depth"] = minimax_depth
+    backend_session["ghost_mcts_depth"] = ghost_mcts_depth
+    backend_session["ghost_mcts_iterations"] = ghost_mcts_iterations
+    backend_session["last_transition"] = None
+
+
+def _ensure_backend_session():
+    if backend_session["state"] is None:
+        _reset_backend_session(
+            backend_session["minimax_depth"],
+            backend_session["ghost_mcts_depth"],
+            backend_session["ghost_mcts_iterations"],
+        )
+
+
+def create_app():
+    from flask import Flask, jsonify, request
+    from flask_cors import CORS
+
+    app = Flask(__name__)
+    CORS(app)
+
+    @app.get("/api/state")
+    def get_state():
+        _ensure_backend_session()
+        payload = _serialize_state(
+            backend_session["state"],
+            backend_session["turn_count"],
+            backend_session["stopped_by_user"],
+            backend_session["last_transition"],
+        )
+        return jsonify(payload)
+
+    @app.post("/api/start")
+    def start_game():
+        body = request.get_json(silent=True) or {}
+        minimax_depth = int(body.get("minimax_depth", backend_session["minimax_depth"]))
+        ghost_mcts_depth = int(body.get("ghost_mcts_depth", backend_session["ghost_mcts_depth"]))
+        ghost_mcts_iterations = int(body.get("ghost_mcts_iterations", backend_session["ghost_mcts_iterations"]))
+
+        _reset_backend_session(minimax_depth, ghost_mcts_depth, ghost_mcts_iterations)
+
+        payload = _serialize_state(
+            backend_session["state"],
+            backend_session["turn_count"],
+            backend_session["stopped_by_user"],
+            backend_session["last_transition"],
+        )
+        return jsonify(payload)
+
+    @app.post("/api/signal")
+    def signal_game():
+        _ensure_backend_session()
+        body = request.get_json(silent=True) or {}
+        action = (body.get("action") or "continue").strip().lower()
+
+        if action in {"quit", "exit", "stop"}:
+            backend_session["stopped_by_user"] = True
+            payload = _serialize_state(
+                backend_session["state"],
+                backend_session["turn_count"],
+                backend_session["stopped_by_user"],
+                backend_session["last_transition"],
+            )
+            return jsonify(payload)
+
+        if action != "continue":
+            return jsonify({"error": "Unsupported action. Use 'continue' or 'quit'."}), 400
+
+        state = backend_session["state"]
+        if state.game_end or backend_session["stopped_by_user"]:
+            payload = _serialize_state(
+                state,
+                backend_session["turn_count"],
+                backend_session["stopped_by_user"],
+                backend_session["last_transition"],
+            )
+            return jsonify(payload)
+
+        next_state, transition = _step_game_state(
+            state,
+            backend_session["minimax_depth"],
+            backend_session["ghost_mcts_depth"],
+            backend_session["ghost_mcts_iterations"],
+        )
+        backend_session["state"] = next_state
+        backend_session["turn_count"] += 1
+        backend_session["last_transition"] = transition
+
+        payload = _serialize_state(
+            backend_session["state"],
+            backend_session["turn_count"],
+            backend_session["stopped_by_user"],
+            backend_session["last_transition"],
+        )
+        return jsonify(payload)
+
+    return app
+
+
 def run_game_loop(
     max_turns=200,
     minimax_depth=3,
@@ -637,22 +803,17 @@ def run_game_loop(
                 output(state)
                 print()
         else:
-            ghost_distance = _distance_for_turn("GHOST1", 0)
-            ghost_move = _mcts_ghost_move(
+            state, _ = _step_game_state(
                 state,
-                max_depth=ghost_mcts_depth,
-                iterations=ghost_mcts_iterations,
+                minimax_depth,
+                ghost_mcts_depth,
+                ghost_mcts_iterations,
             )
-            _ = get_next_move("GHOST1")
-            next_hero_distance = _distance_for_turn("HERO", 0)
-
-            state = move_ghost(state, ghost_move, next_hero_distance)
             turn_count += 1
 
             if show_board:
                 print(
-                    f"Turn {turn_count}: GHOST moved to {ghost_move} "
-                    f"(max distance {ghost_distance})"
+                    f"Turn {turn_count}: GHOST moved"
                 )
                 output(state)
                 print()
@@ -670,4 +831,14 @@ def run_game_loop(
 
 
 if __name__ == "__main__":
-    run_game_loop(max_turns=200, minimax_depth=4, show_board=True)
+    parser = argparse.ArgumentParser(description="PacMan simulation backend/frontend server")
+    parser.add_argument("--api", action="store_true", help="Run Flask API backend")
+    parser.add_argument("--host", default="127.0.0.1", help="API host")
+    parser.add_argument("--port", type=int, default=5000, help="API port")
+    args = parser.parse_args()
+
+    if args.api:
+        app = create_app()
+        app.run(host=args.host, port=args.port)
+    else:
+        run_game_loop(max_turns=200, minimax_depth=4, show_board=True)
