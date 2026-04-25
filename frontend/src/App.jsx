@@ -186,6 +186,7 @@ export default function App() {
   const [ghostMctsDepth, setGhostMctsDepth] = useState(8);
   const [ghostMctsIterations, setGhostMctsIterations] = useState(200);
   const [progressBonusMultiplier, setProgressBonusMultiplier] = useState(50);
+  const [distancePenaltyMultiplier, setDistancePenaltyMultiplier] = useState(1);
   const [dotRewardMultiplier, setDotRewardMultiplier] = useState(10);
   const [survivalBonusMultiplier, setSurvivalBonusMultiplier] = useState(2);
   const [mobilityBonusMultiplier, setMobilityBonusMultiplier] = useState(3);
@@ -215,6 +216,7 @@ export default function App() {
     }
 
     const parsedProgressBonusMultiplier = Number(multipliers.progress_bonus_multiplier);
+    const parsedDistancePenaltyMultiplier = Number(multipliers.distance_penalty_multiplier);
     const parsedDotRewardMultiplier = Number(multipliers.dot_reward_multiplier);
     const parsedSurvivalBonusMultiplier = Number(multipliers.survival_bonus_multiplier);
     const parsedMobilityBonusMultiplier = Number(multipliers.mobility_bonus_multiplier);
@@ -222,6 +224,7 @@ export default function App() {
     const parsedDangerMidPenaltyMultiplier = Number(multipliers.danger_mid_penalty_multiplier);
 
     if (Number.isFinite(parsedProgressBonusMultiplier)) setProgressBonusMultiplier(parsedProgressBonusMultiplier);
+    if (Number.isFinite(parsedDistancePenaltyMultiplier)) setDistancePenaltyMultiplier(parsedDistancePenaltyMultiplier);
     if (Number.isFinite(parsedDotRewardMultiplier)) setDotRewardMultiplier(parsedDotRewardMultiplier);
     if (Number.isFinite(parsedSurvivalBonusMultiplier)) setSurvivalBonusMultiplier(parsedSurvivalBonusMultiplier);
     if (Number.isFinite(parsedMobilityBonusMultiplier)) setMobilityBonusMultiplier(parsedMobilityBonusMultiplier);
@@ -333,6 +336,7 @@ export default function App() {
         ghost_mcts_depth: Number(ghostMctsDepth),
         ghost_mcts_iterations: Number(ghostMctsIterations),
         progress_bonus_multiplier: Number(progressBonusMultiplier),
+        distance_penalty_multiplier: Number(distancePenaltyMultiplier),
         dot_reward_multiplier: Number(dotRewardMultiplier),
         survival_bonus_multiplier: Number(survivalBonusMultiplier),
         mobility_bonus_multiplier: Number(mobilityBonusMultiplier),
@@ -354,6 +358,7 @@ export default function App() {
       const data = await apiPost("/api/signal", {
         action,
         progress_bonus_multiplier: Number(progressBonusMultiplier),
+        distance_penalty_multiplier: Number(distancePenaltyMultiplier),
         dot_reward_multiplier: Number(dotRewardMultiplier),
         survival_bonus_multiplier: Number(survivalBonusMultiplier),
         mobility_bonus_multiplier: Number(mobilityBonusMultiplier),
@@ -420,6 +425,7 @@ export default function App() {
     canControl,
     game?.turn_count,
     progressBonusMultiplier,
+    distancePenaltyMultiplier,
     dotRewardMultiplier,
     survivalBonusMultiplier,
     mobilityBonusMultiplier,
@@ -569,7 +575,7 @@ export default function App() {
                 <div className="slider-row">
                   <input
                     type="range"
-                    min="0"
+                    min="20"
                     max="150"
                     step="1"
                     value={progressBonusMultiplier}
@@ -580,12 +586,27 @@ export default function App() {
                 <small>Default 50. Higher value rewards each collected dot more.</small>
               </label>
               <label className="slider-control">
+                Distance Penalty Multiplier
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3.0"
+                    step="0.1"
+                    value={distancePenaltyMultiplier}
+                    onChange={(e) => setDistancePenaltyMultiplier(Number(e.target.value))}
+                  />
+                  <output>{distancePenaltyMultiplier.toFixed(1)}</output>
+                </div>
+                <small>Default 1. Raises the linear penalty for farther dots.</small>
+              </label>
+              <label className="slider-control">
                 Dot Reward Multiplier
                 <div className="slider-row">
                   <input
                     type="range"
-                    min="0"
-                    max="50"
+                    min="5"
+                    max="30"
                     step="0.5"
                     value={dotRewardMultiplier}
                     onChange={(e) => setDotRewardMultiplier(Number(e.target.value))}
@@ -599,8 +620,8 @@ export default function App() {
                 <div className="slider-row">
                   <input
                     type="range"
-                    min="0"
-                    max="20"
+                    min="0.5"
+                    max="4.0"
                     step="0.5"
                     value={survivalBonusMultiplier}
                     onChange={(e) => setSurvivalBonusMultiplier(Number(e.target.value))}
@@ -615,8 +636,8 @@ export default function App() {
                   <input
                     type="range"
                     min="0"
-                    max="20"
-                    step="0.5"
+                    max="5"
+                    step="0.1"
                     value={mobilityBonusMultiplier}
                     onChange={(e) => setMobilityBonusMultiplier(Number(e.target.value))}
                   />
@@ -629,7 +650,7 @@ export default function App() {
                 <div className="slider-row">
                   <input
                     type="range"
-                    min="0"
+                    min="300"
                     max="2000"
                     step="10"
                     value={dangerNearPenaltyMultiplier}
@@ -644,8 +665,8 @@ export default function App() {
                 <div className="slider-row">
                   <input
                     type="range"
-                    min="0"
-                    max="1000"
+                    min="50"
+                    max="500"
                     step="10"
                     value={dangerMidPenaltyMultiplier}
                     onChange={(e) => setDangerMidPenaltyMultiplier(Number(e.target.value))}

@@ -59,6 +59,7 @@ maze = [list(row) for row in base_maze_layout]
 DOT_TILES = {'o'}
 TOTAL_DOTS = sum(row.count('o') for row in base_maze_layout)
 DEFAULT_PROGRESS_BONUS_MULTIPLIER = 50.0
+DEFAULT_DISTANCE_PENALTY_MULTIPLIER = 1.0
 DEFAULT_DOT_REWARD_MULTIPLIER = 10.0
 DEFAULT_SURVIVAL_BONUS_MULTIPLIER = 2.0
 DEFAULT_MOBILITY_BONUS_MULTIPLIER = 3.0
@@ -67,6 +68,7 @@ DEFAULT_DANGER_MID_PENALTY_MULTIPLIER = 200.0
 
 hero_heuristic_multipliers = {
     "progress_bonus_multiplier": DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    "distance_penalty_multiplier": DEFAULT_DISTANCE_PENALTY_MULTIPLIER,
     "dot_reward_multiplier": DEFAULT_DOT_REWARD_MULTIPLIER,
     "survival_bonus_multiplier": DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
     "mobility_bonus_multiplier": DEFAULT_MOBILITY_BONUS_MULTIPLIER,
@@ -77,6 +79,7 @@ hero_heuristic_multipliers = {
 
 def _set_hero_heuristic_multipliers(
     progress_bonus_multiplier,
+    distance_penalty_multiplier,
     dot_reward_multiplier,
     survival_bonus_multiplier,
     mobility_bonus_multiplier,
@@ -84,6 +87,7 @@ def _set_hero_heuristic_multipliers(
     danger_mid_penalty_multiplier,
 ):
     hero_heuristic_multipliers["progress_bonus_multiplier"] = max(0.0, float(progress_bonus_multiplier))
+    hero_heuristic_multipliers["distance_penalty_multiplier"] = max(0.0, float(distance_penalty_multiplier))
     hero_heuristic_multipliers["dot_reward_multiplier"] = max(0.0, float(dot_reward_multiplier))
     hero_heuristic_multipliers["survival_bonus_multiplier"] = max(0.0, float(survival_bonus_multiplier))
     hero_heuristic_multipliers["mobility_bonus_multiplier"] = max(0.0, float(mobility_bonus_multiplier))
@@ -364,43 +368,51 @@ def heroistics(state):
     # Progress
     dots_eaten = TOTAL_DOTS - len(state.dots)
 
-    # --- Key Improvements ---
-
+    # --- Multipliers ---
     progress_bonus_multiplier = hero_heuristic_multipliers["progress_bonus_multiplier"]
+    distance_penalty_multiplier = hero_heuristic_multipliers["distance_penalty_multiplier"]
     dot_reward_multiplier = hero_heuristic_multipliers["dot_reward_multiplier"]
     survival_bonus_multiplier = hero_heuristic_multipliers["survival_bonus_multiplier"]
     mobility_bonus_multiplier = hero_heuristic_multipliers["mobility_bonus_multiplier"]
     danger_near_penalty_multiplier = hero_heuristic_multipliers["danger_near_penalty_multiplier"]
     danger_mid_penalty_multiplier = hero_heuristic_multipliers["danger_mid_penalty_multiplier"]
 
-    # 1. Nonlinear danger (VERY important)
-    danger_penalty = 0
-    if dist_ghost <= 2:
-        danger_penalty = -danger_near_penalty_multiplier   # immediate danger
-    elif dist_ghost <= 4:
+    # --- 1. Nonlinear danger ---
+    if dist_ghost <= 4:
+        danger_penalty = -danger_near_penalty_multiplier
+    elif dist_ghost <= 8:
         danger_penalty = -danger_mid_penalty_multiplier
     else:
         danger_penalty = 0
 
-    # 2. Encourage moving toward dots, but not blindly
+    # --- 2. Dot attraction (close-range strong pull) ---
     dot_reward = dot_reward_multiplier / (dist_dot + 1)
 
-    # 3. Survival bonus (prefer staying alive longer)
+    # --- 3. Linear distance penalty (FIXES your issue) ---
+    distance_penalty = -dist_dot * distance_penalty_multiplier
+
+    # --- 4. Survival bonus ---
     survival_bonus = dist_ghost * survival_bonus_multiplier
 
-    # 4. Penalize being stuck / low mobility
+    # --- 5. Mobility bonus ---
     mobility = len(_get_linear_moves(hero, 2))
     mobility_bonus = mobility * mobility_bonus_multiplier
 
-    # 5. Reward finishing dots
+    # --- 6. Progress bonus ---
     progress_bonus = dots_eaten * progress_bonus_multiplier
+
+    # --- Optional: tiny noise to break ties ---
+    # import random
+    # noise = random.uniform(0, 0.01)
 
     return (
         progress_bonus
         + dot_reward
+        + distance_penalty   # ⭐ critical fix
         + survival_bonus
         + mobility_bonus
         + danger_penalty
+        # + noise
     )
 
 
@@ -593,6 +605,7 @@ def _hero_decision_signature(state, minimax_depth):
         state,
         int(minimax_depth),
         hero_heuristic_multipliers["progress_bonus_multiplier"],
+        hero_heuristic_multipliers["distance_penalty_multiplier"],
         hero_heuristic_multipliers["dot_reward_multiplier"],
         hero_heuristic_multipliers["survival_bonus_multiplier"],
         hero_heuristic_multipliers["mobility_bonus_multiplier"],
@@ -987,6 +1000,7 @@ def _capture_undo_snapshot():
         "ghost1_moves": list(ghost1_moves),
         "ghost2_moves": list(ghost2_moves),
         "progress_bonus_multiplier": backend_session["progress_bonus_multiplier"],
+        "distance_penalty_multiplier": backend_session["distance_penalty_multiplier"],
         "dot_reward_multiplier": backend_session["dot_reward_multiplier"],
         "survival_bonus_multiplier": backend_session["survival_bonus_multiplier"],
         "mobility_bonus_multiplier": backend_session["mobility_bonus_multiplier"],
@@ -1001,6 +1015,7 @@ def _restore_undo_snapshot(snapshot):
     backend_session["stopped_by_user"] = snapshot["stopped_by_user"]
     backend_session["last_transition"] = snapshot["last_transition"]
     backend_session["progress_bonus_multiplier"] = snapshot["progress_bonus_multiplier"]
+    backend_session["distance_penalty_multiplier"] = snapshot["distance_penalty_multiplier"]
     backend_session["dot_reward_multiplier"] = snapshot["dot_reward_multiplier"]
     backend_session["survival_bonus_multiplier"] = snapshot["survival_bonus_multiplier"]
     backend_session["mobility_bonus_multiplier"] = snapshot["mobility_bonus_multiplier"]
@@ -1016,6 +1031,7 @@ def _restore_undo_snapshot(snapshot):
 
     _set_hero_heuristic_multipliers(
         backend_session["progress_bonus_multiplier"],
+        backend_session["distance_penalty_multiplier"],
         backend_session["dot_reward_multiplier"],
         backend_session["survival_bonus_multiplier"],
         backend_session["mobility_bonus_multiplier"],
@@ -1077,6 +1093,7 @@ def _serialize_state(
         "planned_hero_value": planned_hero_value,
         "hero_multipliers": {
             "progress_bonus_multiplier": hero_heuristic_multipliers["progress_bonus_multiplier"],
+            "distance_penalty_multiplier": hero_heuristic_multipliers["distance_penalty_multiplier"],
             "dot_reward_multiplier": hero_heuristic_multipliers["dot_reward_multiplier"],
             "survival_bonus_multiplier": hero_heuristic_multipliers["survival_bonus_multiplier"],
             "mobility_bonus_multiplier": hero_heuristic_multipliers["mobility_bonus_multiplier"],
@@ -1094,6 +1111,7 @@ backend_session = {
     "ghost_mcts_depth": 8,
     "ghost_mcts_iterations": 200,
     "progress_bonus_multiplier": DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    "distance_penalty_multiplier": DEFAULT_DISTANCE_PENALTY_MULTIPLIER,
     "dot_reward_multiplier": DEFAULT_DOT_REWARD_MULTIPLIER,
     "survival_bonus_multiplier": DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
     "mobility_bonus_multiplier": DEFAULT_MOBILITY_BONUS_MULTIPLIER,
@@ -1111,6 +1129,7 @@ def _reset_backend_session(
     ghost_mcts_depth=8,
     ghost_mcts_iterations=200,
     progress_bonus_multiplier=DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    distance_penalty_multiplier=DEFAULT_DISTANCE_PENALTY_MULTIPLIER,
     dot_reward_multiplier=DEFAULT_DOT_REWARD_MULTIPLIER,
     survival_bonus_multiplier=DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
     mobility_bonus_multiplier=DEFAULT_MOBILITY_BONUS_MULTIPLIER,
@@ -1125,6 +1144,7 @@ def _reset_backend_session(
     backend_session["ghost_mcts_iterations"] = ghost_mcts_iterations
     _set_hero_heuristic_multipliers(
         progress_bonus_multiplier,
+        distance_penalty_multiplier,
         dot_reward_multiplier,
         survival_bonus_multiplier,
         mobility_bonus_multiplier,
@@ -1132,6 +1152,7 @@ def _reset_backend_session(
         danger_mid_penalty_multiplier,
     )
     backend_session["progress_bonus_multiplier"] = hero_heuristic_multipliers["progress_bonus_multiplier"]
+    backend_session["distance_penalty_multiplier"] = hero_heuristic_multipliers["distance_penalty_multiplier"]
     backend_session["dot_reward_multiplier"] = hero_heuristic_multipliers["dot_reward_multiplier"]
     backend_session["survival_bonus_multiplier"] = hero_heuristic_multipliers["survival_bonus_multiplier"]
     backend_session["mobility_bonus_multiplier"] = hero_heuristic_multipliers["mobility_bonus_multiplier"]
@@ -1150,6 +1171,7 @@ def _ensure_backend_session():
             backend_session["ghost_mcts_depth"],
             backend_session["ghost_mcts_iterations"],
             backend_session["progress_bonus_multiplier"],
+            backend_session["distance_penalty_multiplier"],
             backend_session["dot_reward_multiplier"],
             backend_session["survival_bonus_multiplier"],
             backend_session["mobility_bonus_multiplier"],
@@ -1198,6 +1220,10 @@ def create_app():
             body.get("progress_bonus_multiplier", backend_session["progress_bonus_multiplier"]),
             backend_session["progress_bonus_multiplier"],
         )
+        distance_penalty_multiplier = _parse_float(
+            body.get("distance_penalty_multiplier", backend_session["distance_penalty_multiplier"]),
+            backend_session["distance_penalty_multiplier"],
+        )
         dot_reward_multiplier = _parse_float(
             body.get("dot_reward_multiplier", backend_session["dot_reward_multiplier"]),
             backend_session["dot_reward_multiplier"],
@@ -1224,6 +1250,7 @@ def create_app():
             ghost_mcts_depth,
             ghost_mcts_iterations,
             progress_bonus_multiplier,
+            distance_penalty_multiplier,
             dot_reward_multiplier,
             survival_bonus_multiplier,
             mobility_bonus_multiplier,
@@ -1244,6 +1271,10 @@ def create_app():
             _parse_float(
                 body.get("progress_bonus_multiplier", backend_session["progress_bonus_multiplier"]),
                 backend_session["progress_bonus_multiplier"],
+            ),
+            _parse_float(
+                body.get("distance_penalty_multiplier", backend_session["distance_penalty_multiplier"]),
+                backend_session["distance_penalty_multiplier"],
             ),
             _parse_float(
                 body.get("dot_reward_multiplier", backend_session["dot_reward_multiplier"]),
@@ -1267,6 +1298,7 @@ def create_app():
             ),
         )
         backend_session["progress_bonus_multiplier"] = hero_heuristic_multipliers["progress_bonus_multiplier"]
+        backend_session["distance_penalty_multiplier"] = hero_heuristic_multipliers["distance_penalty_multiplier"]
         backend_session["dot_reward_multiplier"] = hero_heuristic_multipliers["dot_reward_multiplier"]
         backend_session["survival_bonus_multiplier"] = hero_heuristic_multipliers["survival_bonus_multiplier"]
         backend_session["mobility_bonus_multiplier"] = hero_heuristic_multipliers["mobility_bonus_multiplier"]
