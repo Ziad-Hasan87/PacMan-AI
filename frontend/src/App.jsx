@@ -172,6 +172,9 @@ export default function App() {
   const [minimaxDepth, setMinimaxDepth] = useState(4);
   const [ghostMctsDepth, setGhostMctsDepth] = useState(8);
   const [ghostMctsIterations, setGhostMctsIterations] = useState(200);
+  const [thirst, setThirst] = useState(1);
+  const [commitment, setCommitment] = useState(1);
+  const [safety, setSafety] = useState(1);
 
   useEffect(() => {
     void refreshState();
@@ -187,7 +190,23 @@ export default function App() {
     timersRef.current = [];
   }
 
+  function syncHeuristicMultipliers(nextData) {
+    const multipliers = nextData?.hero_multipliers;
+    if (!multipliers) {
+      return;
+    }
+
+    const parsedThirst = Number(multipliers.thirst);
+    const parsedCommitment = Number(multipliers.commitment);
+    const parsedSafety = Number(multipliers.safety);
+
+    if (Number.isFinite(parsedThirst)) setThirst(parsedThirst);
+    if (Number.isFinite(parsedCommitment)) setCommitment(parsedCommitment);
+    if (Number.isFinite(parsedSafety)) setSafety(parsedSafety);
+  }
+
   function pushGameData(nextData) {
+    syncHeuristicMultipliers(nextData);
     const previousData = gameRef.current;
     setGame(nextData);
 
@@ -288,6 +307,9 @@ export default function App() {
         minimax_depth: Number(minimaxDepth),
         ghost_mcts_depth: Number(ghostMctsDepth),
         ghost_mcts_iterations: Number(ghostMctsIterations),
+        thirst: Number(thirst),
+        commitment: Number(commitment),
+        safety: Number(safety),
       });
       pushGameData(data);
     } catch (err) {
@@ -301,7 +323,12 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const data = await apiPost("/api/signal", { action });
+      const data = await apiPost("/api/signal", {
+        action,
+        thirst: Number(thirst),
+        commitment: Number(commitment),
+        safety: Number(safety),
+      });
       pushGameData(data);
     } catch (err) {
       setError(String(err));
@@ -407,7 +434,7 @@ export default function App() {
           <section className="panel controls">
             <div className="controls-title-row">
               <h2>Simulation Settings</h2>
-              <span className="muted">Tune search before starting or resetting.</span>
+              <span className="muted">Tune search and heuristic weights before starting or resetting.</span>
             </div>
 
             <div className="config-grid">
@@ -437,6 +464,51 @@ export default function App() {
                   value={ghostMctsIterations}
                   onChange={(e) => setGhostMctsIterations(e.target.value)}
                 />
+              </label>
+              <label className="slider-control">
+                Thirst
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={thirst}
+                    onChange={(e) => setThirst(Number(e.target.value))}
+                  />
+                  <output>{thirst.toFixed(1)}</output>
+                </div>
+                <small>Higher value boosts score as dots become scarce.</small>
+              </label>
+              <label className="slider-control">
+                Commitment
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={commitment}
+                    onChange={(e) => setCommitment(Number(e.target.value))}
+                  />
+                  <output>{commitment.toFixed(1)}</output>
+                </div>
+                <small>Higher value increases distance-to-dots contribution.</small>
+              </label>
+              <label className="slider-control">
+                Safety
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={safety}
+                    onChange={(e) => setSafety(Number(e.target.value))}
+                  />
+                  <output>{safety.toFixed(1)}</output>
+                </div>
+                <small>Higher value increases ghost-proximity penalty.</small>
               </label>
             </div>
 

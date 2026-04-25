@@ -41,6 +41,28 @@ base_maze_layout = list(maze_layout)
 maze = [list(row) for row in base_maze_layout]
 DOT_TILES = {'o'}
 TOTAL_DOTS = sum(row.count('o') for row in base_maze_layout)
+DEFAULT_THIRST = 1.0
+DEFAULT_COMMITMENT = 1.0
+DEFAULT_SAFETY = 1.0
+
+hero_heuristic_multipliers = {
+    "thirst": DEFAULT_THIRST,
+    "commitment": DEFAULT_COMMITMENT,
+    "safety": DEFAULT_SAFETY,
+}
+
+
+def _set_hero_heuristic_multipliers(thirst, commitment, safety):
+    hero_heuristic_multipliers["thirst"] = max(0.0, float(thirst))
+    hero_heuristic_multipliers["commitment"] = max(0.0, float(commitment))
+    hero_heuristic_multipliers["safety"] = max(0.0, float(safety))
+
+
+def _parse_float(value, fallback):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
 
 
 def update_maze_from_state(state):
@@ -75,6 +97,7 @@ def _finalize_state(state):
     update_maze_from_state(state)
     return state
 
+
 @dataclass(frozen=True)
 class GameState:
     hero: Tuple[int, int]
@@ -99,10 +122,11 @@ class _MCTSNode:
     children: List["_MCTSNode"] = field(default_factory=list)
     untried_moves: List[Tuple[int, int]] = field(default_factory=list)
 
+
 def move_hero(state, new_position, new_dice):
     r1, c1 = state.hero
     r2, c2 = new_position
-    
+
     new_dots = state.dots
 
     if r1 == r2:
@@ -113,13 +137,13 @@ def move_hero(state, new_position, new_dice):
         for c in range(c1 + step, c2 + step, step):
             if (r1, c) in state.ghosts:
                 return _finalize_state(GameState(
-                    hero = (r1, c),
-                    ghosts = state.ghosts,
-                    dots = new_dots,
-                    turn = "GHOST",
-                    dice = new_dice,
-                    game_end = True,
-                    winner = "GHOST"
+                    hero=(r1, c),
+                    ghosts=state.ghosts,
+                    dots=new_dots,
+                    turn="GHOST",
+                    dice=new_dice,
+                    game_end=True,
+                    winner="GHOST"
                 ))
             if (r1, c) in new_dots:
                 new_dots = new_dots - {(r1, c)}
@@ -132,26 +156,26 @@ def move_hero(state, new_position, new_dice):
         for r in range(r1 + step, r2 + step, step):
             if (r, c1) in state.ghosts:
                 return _finalize_state(GameState(
-                    hero = (r, c1),
-                    ghosts = state.ghosts,
-                    dots = new_dots,
-                    turn = "GHOST",
-                    dice = new_dice,
-                    game_end = True,
-                    winner = "GHOST"
+                    hero=(r, c1),
+                    ghosts=state.ghosts,
+                    dots=new_dots,
+                    turn="GHOST",
+                    dice=new_dice,
+                    game_end=True,
+                    winner="GHOST"
                 ))
             if (r, c1) in new_dots:
                 new_dots = new_dots - {(r, c1)}
 
     if len(new_dots) == 0:
         return _finalize_state(GameState(
-            hero = new_position,
-            ghosts = state.ghosts,
-            dots = new_dots,
-            turn = "GHOST",
-            dice = new_dice,
-            game_end = True,
-            winner = "HERO"
+            hero=new_position,
+            ghosts=state.ghosts,
+            dots=new_dots,
+            turn="GHOST",
+            dice=new_dice,
+            game_end=True,
+            winner="HERO"
         ))
     return _finalize_state(GameState(
         hero=new_position,
@@ -159,9 +183,11 @@ def move_hero(state, new_position, new_dice):
         dots=frozenset(new_dots),
         turn="GHOST",
         dice=new_dice,
-        game_end = False,
-        winner = None
+        game_end=False,
+        winner=None
     ))
+
+
 def move_ghost(state, new_position, new_dice):
     ghosts = list(state.ghosts)
     ghosts[0] = new_position
@@ -189,6 +215,7 @@ def move_ghost(state, new_position, new_dice):
         winner=None
     ))
 
+
 hero_moves = []
 ghost1_moves = []
 ghost2_moves = []
@@ -211,18 +238,21 @@ def _distance_for_turn(agent, turn_offset=0):
         queue.append(random.randint(1, 6))
     return max(1, queue[turn_offset])
 
+
 def generate_next_move(agent):
     move = random.randint(1, 6)
     queue = _get_agent_queue(agent)
     queue.append(move)
     return move
-    
+
+
 def get_next_move(agent):
     queue = _get_agent_queue(agent)
     if not queue:
         generate_next_move(agent)
     return queue.pop(0)
-    
+
+
 def initialize_game():
     hero_moves.clear()
     ghost1_moves.clear()
@@ -235,12 +265,12 @@ def initialize_game():
         for c in range(len(base_maze_layout[r])):
             if base_maze_layout[r][c] in DOT_TILES:
                 dots.add((r, c))
-                
-    for i in range(0,100):
+
+    for i in range(0, 100):
         generate_next_move("HERO")
         generate_next_move("GHOST1")
         generate_next_move("GHOST2")
-        
+
     return _finalize_state(GameState(
         hero=hero_start,
         ghosts=tuple(ghost_starts),
@@ -248,6 +278,7 @@ def initialize_game():
         turn="HERO",
         dice=0
     ))
+
 
 def heroistics(state):
     if state.game_end:
@@ -257,11 +288,22 @@ def heroistics(state):
             return -(10**9)
 
     hero_r, hero_c = state.hero
-    distance_to_dots = _shortest_path_distance((hero_r, hero_c), state.dots) if state.dots else 0
+    distance_to_dots = _shortest_path_distance(
+        (hero_r, hero_c), state.dots) if state.dots else 0
+    distance_to_ghost = _shortest_path_distance(
+        (hero_r, hero_c), set(state.ghosts)) if state.ghosts else 0
 
-    # Primary objective: consume 'o'. Secondary: move toward nearest remaining 'o'.
     dots_eaten = TOTAL_DOTS - len(state.dots)
-    return dots_eaten * 10000 - distance_to_dots
+    thirst = hero_heuristic_multipliers["thirst"]
+    commitment = hero_heuristic_multipliers["commitment"]
+    safety = hero_heuristic_multipliers["safety"]
+
+    # New weighted structure requested from UI sliders.
+    return (
+        thirst * dots_eaten
+        - commitment * distance_to_dots
+        + safety * distance_to_ghost
+    )
 
 
 def ghost_heuristic(state):
@@ -355,7 +397,8 @@ def _minimax(state, depth, is_hero_turn, hero_turn_index=0, ghost_turn_index=0):
         best_move = hero_candidates[0]
 
         for candidate in hero_candidates:
-            next_ghost_distance = _distance_for_turn("GHOST1", ghost_turn_index)
+            next_ghost_distance = _distance_for_turn(
+                "GHOST1", ghost_turn_index)
             next_state = move_hero(state, candidate, next_ghost_distance)
             value, _ = _minimax(
                 next_state,
@@ -461,7 +504,8 @@ def _uct_select_child(node, exploration_constant):
 
 
 def _rollout_policy_move(state, hero_turn_index, ghost_turn_index):
-    legal_moves = _legal_moves_for_state(state, hero_turn_index, ghost_turn_index)
+    legal_moves = _legal_moves_for_state(
+        state, hero_turn_index, ghost_turn_index)
     if not legal_moves:
         return None
 
@@ -473,7 +517,8 @@ def _rollout_policy_move(state, hero_turn_index, ghost_turn_index):
     best_move = legal_moves[0]
     best_value = float('-inf')
     for move in legal_moves:
-        next_state, _, _ = _apply_turn_move(state, move, hero_turn_index, ghost_turn_index)
+        next_state, _, _ = _apply_turn_move(
+            state, move, hero_turn_index, ghost_turn_index)
         value = heroistics(next_state)
         if value > best_value:
             best_value = value
@@ -489,7 +534,8 @@ def _rollout_ghost_value(state, hero_turn_index, ghost_turn_index, depth, max_de
     current_ghost_index = ghost_turn_index
 
     while not current_state.game_end and current_depth < max_depth:
-        move = _rollout_policy_move(current_state, current_hero_index, current_ghost_index)
+        move = _rollout_policy_move(
+            current_state, current_hero_index, current_ghost_index)
         if move is None:
             break
 
@@ -582,7 +628,8 @@ def _mcts_ghost_move(state, max_depth=8, iterations=200, exploration_constant=1.
     # Pick root child with best average ghost value.
     best_child = max(
         root.children,
-        key=lambda child: (child.value_sum / child.visits) if child.visits else float('-inf'),
+        key=lambda child: (child.value_sum /
+                           child.visits) if child.visits else float('-inf'),
     ) if root.children else None
 
     # MCTS explores simulated states that update the global display; restore current one.
@@ -640,6 +687,11 @@ def _serialize_state(state, turn_count, stopped_by_user=False, last_transition=N
         "turn_count": turn_count,
         "stopped_by_user": stopped_by_user,
         "last_transition": last_transition,
+        "hero_multipliers": {
+            "thirst": hero_heuristic_multipliers["thirst"],
+            "commitment": hero_heuristic_multipliers["commitment"],
+            "safety": hero_heuristic_multipliers["safety"],
+        },
     }
 
 
@@ -650,17 +702,35 @@ backend_session = {
     "minimax_depth": 4,
     "ghost_mcts_depth": 8,
     "ghost_mcts_iterations": 200,
+    "thirst": DEFAULT_THIRST,
+    "commitment": DEFAULT_COMMITMENT,
+    "safety": DEFAULT_SAFETY,
     "last_transition": None,
 }
 
 
-def _reset_backend_session(minimax_depth=4, ghost_mcts_depth=8, ghost_mcts_iterations=200):
+def _reset_backend_session(
+    minimax_depth=4,
+    ghost_mcts_depth=8,
+    ghost_mcts_iterations=200,
+    thirst=DEFAULT_THIRST,
+    commitment=DEFAULT_COMMITMENT,
+    safety=DEFAULT_SAFETY,
+):
     backend_session["state"] = initialize_game()
     backend_session["turn_count"] = 0
     backend_session["stopped_by_user"] = False
     backend_session["minimax_depth"] = minimax_depth
     backend_session["ghost_mcts_depth"] = ghost_mcts_depth
     backend_session["ghost_mcts_iterations"] = ghost_mcts_iterations
+    _set_hero_heuristic_multipliers(
+        thirst,
+        commitment,
+        safety,
+    )
+    backend_session["thirst"] = hero_heuristic_multipliers["thirst"]
+    backend_session["commitment"] = hero_heuristic_multipliers["commitment"]
+    backend_session["safety"] = hero_heuristic_multipliers["safety"]
     backend_session["last_transition"] = None
 
 
@@ -670,6 +740,9 @@ def _ensure_backend_session():
             backend_session["minimax_depth"],
             backend_session["ghost_mcts_depth"],
             backend_session["ghost_mcts_iterations"],
+            backend_session["thirst"],
+            backend_session["commitment"],
+            backend_session["safety"],
         )
 
 
@@ -694,11 +767,27 @@ def create_app():
     @app.post("/api/start")
     def start_game():
         body = request.get_json(silent=True) or {}
-        minimax_depth = int(body.get("minimax_depth", backend_session["minimax_depth"]))
-        ghost_mcts_depth = int(body.get("ghost_mcts_depth", backend_session["ghost_mcts_depth"]))
-        ghost_mcts_iterations = int(body.get("ghost_mcts_iterations", backend_session["ghost_mcts_iterations"]))
+        minimax_depth = int(
+            body.get("minimax_depth", backend_session["minimax_depth"]))
+        ghost_mcts_depth = int(
+            body.get("ghost_mcts_depth", backend_session["ghost_mcts_depth"]))
+        ghost_mcts_iterations = int(
+            body.get("ghost_mcts_iterations", backend_session["ghost_mcts_iterations"]))
+        thirst = _parse_float(
+            body.get("thirst", backend_session["thirst"]), backend_session["thirst"])
+        commitment = _parse_float(body.get(
+            "commitment", backend_session["commitment"]), backend_session["commitment"])
+        safety = _parse_float(
+            body.get("safety", backend_session["safety"]), backend_session["safety"])
 
-        _reset_backend_session(minimax_depth, ghost_mcts_depth, ghost_mcts_iterations)
+        _reset_backend_session(
+            minimax_depth,
+            ghost_mcts_depth,
+            ghost_mcts_iterations,
+            thirst,
+            commitment,
+            safety,
+        )
 
         payload = _serialize_state(
             backend_session["state"],
@@ -713,6 +802,18 @@ def create_app():
         _ensure_backend_session()
         body = request.get_json(silent=True) or {}
         action = (body.get("action") or "continue").strip().lower()
+
+        _set_hero_heuristic_multipliers(
+            _parse_float(
+                body.get("thirst", backend_session["thirst"]), backend_session["thirst"]),
+            _parse_float(body.get(
+                "commitment", backend_session["commitment"]), backend_session["commitment"]),
+            _parse_float(
+                body.get("safety", backend_session["safety"]), backend_session["safety"]),
+        )
+        backend_session["thirst"] = hero_heuristic_multipliers["thirst"]
+        backend_session["commitment"] = hero_heuristic_multipliers["commitment"]
+        backend_session["safety"] = hero_heuristic_multipliers["safety"]
 
         if action in {"quit", "exit", "stop"}:
             backend_session["stopped_by_user"] = True
@@ -817,7 +918,8 @@ def run_game_loop(
                 )
                 output(state)
                 print()
-        print(f"Turn {turn_count} completed. Current heuristices: {heroistics(state)}")
+        print(
+            f"Turn {turn_count} completed. Current heuristices: {heroistics(state)}")
         print(f"Remaining dots: {state.dots}")
 
     if state.game_end:
@@ -831,8 +933,10 @@ def run_game_loop(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="PacMan simulation backend/frontend server")
-    parser.add_argument("--api", action="store_true", help="Run Flask API backend")
+    parser = argparse.ArgumentParser(
+        description="PacMan simulation backend/frontend server")
+    parser.add_argument("--api", action="store_true",
+                        help="Run Flask API backend")
     parser.add_argument("--host", default="127.0.0.1", help="API host")
     parser.add_argument("--port", type=int, default=5000, help="API port")
     args = parser.parse_args()
