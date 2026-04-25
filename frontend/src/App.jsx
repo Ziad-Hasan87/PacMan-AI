@@ -5,6 +5,7 @@ import pacmanImg from "../assets/pacman.png";
 import wallImg from "../assets/wall.png";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
+const AUTO_PLAY_DELAY_MS = 420;
 
 async function apiGet(path) {
   const response = await fetch(`${API_BASE}${path}`);
@@ -155,6 +156,18 @@ function displayCharAt(rows, visual, row, col) {
   return rows[row]?.[col] || " ";
 }
 
+function isNearestDot(game, row, col) {
+  const pos = game?.nearest_dot_position;
+  return Array.isArray(pos) && pos.length === 2 && pos[0] === row && pos[1] === col;
+}
+
+function formatPosition(position) {
+  if (!Array.isArray(position) || position.length !== 2) {
+    return "-";
+  }
+  return `[${position[0]}, ${position[1]}]`;
+}
+
 export default function App() {
   const [game, setGame] = useState(null);
   const [visual, setVisual] = useState(null);
@@ -172,9 +185,14 @@ export default function App() {
   const [minimaxDepth, setMinimaxDepth] = useState(4);
   const [ghostMctsDepth, setGhostMctsDepth] = useState(8);
   const [ghostMctsIterations, setGhostMctsIterations] = useState(200);
-  const [thirst, setThirst] = useState(1);
-  const [commitment, setCommitment] = useState(1);
-  const [safety, setSafety] = useState(1);
+  const [progressBonusMultiplier, setProgressBonusMultiplier] = useState(50);
+  const [dotRewardMultiplier, setDotRewardMultiplier] = useState(10);
+  const [survivalBonusMultiplier, setSurvivalBonusMultiplier] = useState(2);
+  const [mobilityBonusMultiplier, setMobilityBonusMultiplier] = useState(3);
+  const [dangerNearPenaltyMultiplier, setDangerNearPenaltyMultiplier] = useState(1000);
+  const [dangerMidPenaltyMultiplier, setDangerMidPenaltyMultiplier] = useState(200);
+  const [autoPlay, setAutoPlay] = useState(false);
+  const [showHeroMoves, setShowHeroMoves] = useState(false);
 
   useEffect(() => {
     void refreshState();
@@ -196,21 +214,28 @@ export default function App() {
       return;
     }
 
-    const parsedThirst = Number(multipliers.thirst);
-    const parsedCommitment = Number(multipliers.commitment);
-    const parsedSafety = Number(multipliers.safety);
+    const parsedProgressBonusMultiplier = Number(multipliers.progress_bonus_multiplier);
+    const parsedDotRewardMultiplier = Number(multipliers.dot_reward_multiplier);
+    const parsedSurvivalBonusMultiplier = Number(multipliers.survival_bonus_multiplier);
+    const parsedMobilityBonusMultiplier = Number(multipliers.mobility_bonus_multiplier);
+    const parsedDangerNearPenaltyMultiplier = Number(multipliers.danger_near_penalty_multiplier);
+    const parsedDangerMidPenaltyMultiplier = Number(multipliers.danger_mid_penalty_multiplier);
 
-    if (Number.isFinite(parsedThirst)) setThirst(parsedThirst);
-    if (Number.isFinite(parsedCommitment)) setCommitment(parsedCommitment);
-    if (Number.isFinite(parsedSafety)) setSafety(parsedSafety);
+    if (Number.isFinite(parsedProgressBonusMultiplier)) setProgressBonusMultiplier(parsedProgressBonusMultiplier);
+    if (Number.isFinite(parsedDotRewardMultiplier)) setDotRewardMultiplier(parsedDotRewardMultiplier);
+    if (Number.isFinite(parsedSurvivalBonusMultiplier)) setSurvivalBonusMultiplier(parsedSurvivalBonusMultiplier);
+    if (Number.isFinite(parsedMobilityBonusMultiplier)) setMobilityBonusMultiplier(parsedMobilityBonusMultiplier);
+    if (Number.isFinite(parsedDangerNearPenaltyMultiplier)) setDangerNearPenaltyMultiplier(parsedDangerNearPenaltyMultiplier);
+    if (Number.isFinite(parsedDangerMidPenaltyMultiplier)) setDangerMidPenaltyMultiplier(parsedDangerMidPenaltyMultiplier);
   }
 
-  function pushGameData(nextData) {
+  function pushGameData(nextData, options = {}) {
+    const skipAnimation = Boolean(options.skipAnimation);
     syncHeuristicMultipliers(nextData);
     const previousData = gameRef.current;
     setGame(nextData);
 
-    if (!previousData) {
+    if (!previousData || skipAnimation) {
       setVisual(toVisualState(nextData));
       gameRef.current = nextData;
       setMovingActor(null);
@@ -307,9 +332,12 @@ export default function App() {
         minimax_depth: Number(minimaxDepth),
         ghost_mcts_depth: Number(ghostMctsDepth),
         ghost_mcts_iterations: Number(ghostMctsIterations),
-        thirst: Number(thirst),
-        commitment: Number(commitment),
-        safety: Number(safety),
+        progress_bonus_multiplier: Number(progressBonusMultiplier),
+        dot_reward_multiplier: Number(dotRewardMultiplier),
+        survival_bonus_multiplier: Number(survivalBonusMultiplier),
+        mobility_bonus_multiplier: Number(mobilityBonusMultiplier),
+        danger_near_penalty_multiplier: Number(dangerNearPenaltyMultiplier),
+        danger_mid_penalty_multiplier: Number(dangerMidPenaltyMultiplier),
       });
       pushGameData(data);
     } catch (err) {
@@ -325,9 +353,12 @@ export default function App() {
     try {
       const data = await apiPost("/api/signal", {
         action,
-        thirst: Number(thirst),
-        commitment: Number(commitment),
-        safety: Number(safety),
+        progress_bonus_multiplier: Number(progressBonusMultiplier),
+        dot_reward_multiplier: Number(dotRewardMultiplier),
+        survival_bonus_multiplier: Number(survivalBonusMultiplier),
+        mobility_bonus_multiplier: Number(mobilityBonusMultiplier),
+        danger_near_penalty_multiplier: Number(dangerNearPenaltyMultiplier),
+        danger_mid_penalty_multiplier: Number(dangerMidPenaltyMultiplier),
       });
       pushGameData(data);
     } catch (err) {
@@ -337,11 +368,70 @@ export default function App() {
     }
   }
 
+  async function undoLastMove() {
+    setLoading(true);
+    setError("");
+    setAutoPlay(false);
+    try {
+      clearPendingAnimationTimers();
+      const data = await apiPost("/api/undo", {});
+      pushGameData(data, { skipAnimation: true });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const boardRows = useMemo(() => visual?.maze_layout || [], [visual]);
   const rowCount = boardRows.length;
-  const colCount = boardRows[0]?.length || 0;
+  const colCount = useMemo(
+    () => boardRows.reduce((max, row) => Math.max(max, row.length), 0),
+    [boardRows],
+  );
   const canControl = !!game && !game.game_end && !game.stopped_by_user;
   const statusTone = game?.game_end ? "finished" : game?.stopped_by_user ? "paused" : "running";
+  const heroMoveHints = useMemo(() => {
+    const entries = game?.hero_move_evaluations || [];
+    const map = new Map();
+    for (const entry of entries) {
+      const pos = entry?.position;
+      if (!Array.isArray(pos) || pos.length !== 2) continue;
+      map.set(`${pos[0]}-${pos[1]}`, entry.heuristic);
+    }
+    return map;
+  }, [game?.hero_move_evaluations]);
+
+  useEffect(() => {
+    if (!autoPlay || loading || !canControl) {
+      return;
+    }
+
+    const timerId = setTimeout(() => {
+      void signal("continue");
+    }, AUTO_PLAY_DELAY_MS);
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [
+    autoPlay,
+    loading,
+    canControl,
+    game?.turn_count,
+    progressBonusMultiplier,
+    dotRewardMultiplier,
+    survivalBonusMultiplier,
+    mobilityBonusMultiplier,
+    dangerNearPenaltyMultiplier,
+    dangerMidPenaltyMultiplier,
+  ]);
+
+  useEffect(() => {
+    if (autoPlay && !canControl) {
+      setAutoPlay(false);
+    }
+  }, [autoPlay, canControl]);
 
   useEffect(() => {
     const shell = boardShellRef.current;
@@ -358,7 +448,7 @@ export default function App() {
 
       const byWidth = Math.floor(availableWidth / colCount);
       const byHeight = Math.floor(availableHeight / rowCount);
-      const next = Math.max(8, Math.min(22, Math.min(byWidth, byHeight)));
+      const next = Math.max(8, Math.min(72, Math.min(byWidth, byHeight)));
       setTileSize(next);
     };
 
@@ -413,15 +503,24 @@ export default function App() {
                       : displayChar === "G" && movingActor === "GHOST"
                         ? " moving-ghost"
                         : "";
+                    const nearestDotClass = isNearestDot(game, r, c) ? " nearest-dot-target" : "";
+                    const hintKey = `${r}-${c}`;
+                    const hasHeroHint = showHeroMoves && heroMoveHints.has(hintKey);
+                    const heroHintClass = hasHeroHint ? " hero-move-option" : "";
+                    const heroHintValue = hasHeroHint ? heroMoveHints.get(hintKey) : null;
 
                     return (
                       <span
                         key={`${r}-${c}`}
-                        className={`${cellClass(displayChar)}${movingClass}`}
+                        className={`${cellClass(displayChar)}${movingClass}${nearestDotClass}${heroHintClass}`}
                         style={cellStyle(displayChar, r, c, boardRows)}
                         title={`(${r}, ${c}) ${displayChar === " " ? "floor" : displayChar}`}
                         aria-label={`${displayChar === " " ? "floor" : displayChar} at row ${r}, col ${c}`}
-                      />
+                      >
+                        {hasHeroHint ? (
+                          <span className="move-hint-label">{Number(heroHintValue).toFixed(1)}</span>
+                        ) : null}
+                      </span>
                     );
                   })}
                 </div>
@@ -466,49 +565,94 @@ export default function App() {
                 />
               </label>
               <label className="slider-control">
-                Thirst
+                Progress Bonus Multiplier
                 <div className="slider-row">
                   <input
                     type="range"
                     min="0"
-                    max="100"
-                    step="0.5"
-                    value={thirst}
-                    onChange={(e) => setThirst(Number(e.target.value))}
+                    max="150"
+                    step="1"
+                    value={progressBonusMultiplier}
+                    onChange={(e) => setProgressBonusMultiplier(Number(e.target.value))}
                   />
-                  <output>{thirst.toFixed(1)}</output>
+                  <output>{progressBonusMultiplier.toFixed(0)}</output>
                 </div>
-                <small>Higher value boosts score as dots become scarce.</small>
+                <small>Default 50. Higher value rewards each collected dot more.</small>
               </label>
               <label className="slider-control">
-                Commitment
+                Dot Reward Multiplier
                 <div className="slider-row">
                   <input
                     type="range"
                     min="0"
-                    max="100"
+                    max="50"
                     step="0.5"
-                    value={commitment}
-                    onChange={(e) => setCommitment(Number(e.target.value))}
+                    value={dotRewardMultiplier}
+                    onChange={(e) => setDotRewardMultiplier(Number(e.target.value))}
                   />
-                  <output>{commitment.toFixed(1)}</output>
+                  <output>{dotRewardMultiplier.toFixed(1)}</output>
                 </div>
-                <small>Higher value increases distance-to-dots contribution.</small>
+                <small>Default 10. Scales reward for being close to dots.</small>
               </label>
               <label className="slider-control">
-                Safety
+                Survival Bonus Multiplier
                 <div className="slider-row">
                   <input
                     type="range"
                     min="0"
-                    max="100"
+                    max="20"
                     step="0.5"
-                    value={safety}
-                    onChange={(e) => setSafety(Number(e.target.value))}
+                    value={survivalBonusMultiplier}
+                    onChange={(e) => setSurvivalBonusMultiplier(Number(e.target.value))}
                   />
-                  <output>{safety.toFixed(1)}</output>
+                  <output>{survivalBonusMultiplier.toFixed(1)}</output>
                 </div>
-                <small>Higher value increases ghost-proximity penalty.</small>
+                <small>Default 2. Scales reward for staying far from ghosts.</small>
+              </label>
+              <label className="slider-control">
+                Mobility Bonus Multiplier
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="20"
+                    step="0.5"
+                    value={mobilityBonusMultiplier}
+                    onChange={(e) => setMobilityBonusMultiplier(Number(e.target.value))}
+                  />
+                  <output>{mobilityBonusMultiplier.toFixed(1)}</output>
+                </div>
+                <small>Default 3. Rewards positions with more immediate options.</small>
+              </label>
+              <label className="slider-control">
+                Danger Near Penalty Multiplier
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="2000"
+                    step="10"
+                    value={dangerNearPenaltyMultiplier}
+                    onChange={(e) => setDangerNearPenaltyMultiplier(Number(e.target.value))}
+                  />
+                  <output>{dangerNearPenaltyMultiplier.toFixed(0)}</output>
+                </div>
+                <small>Default 1000. Penalty when ghost is very close (distance &lt;= 2).</small>
+              </label>
+              <label className="slider-control">
+                Danger Mid Penalty Multiplier
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="1000"
+                    step="10"
+                    value={dangerMidPenaltyMultiplier}
+                    onChange={(e) => setDangerMidPenaltyMultiplier(Number(e.target.value))}
+                  />
+                  <output>{dangerMidPenaltyMultiplier.toFixed(0)}</output>
+                </div>
+                <small>Default 200. Penalty when ghost is near (distance &lt;= 4).</small>
               </label>
             </div>
 
@@ -516,6 +660,23 @@ export default function App() {
               <button className="primary" onClick={startGame} disabled={loading}>Start / Reset</button>
               <button className="accent" onClick={() => signal("continue")} disabled={loading || !canControl}>
                 Continue
+              </button>
+              <button className="ghost" onClick={undoLastMove} disabled={loading || !game || !game.turn_count}>
+                Undo Last Move
+              </button>
+              <button
+                className={autoPlay ? "danger" : "accent"}
+                onClick={() => setAutoPlay((prev) => !prev)}
+                disabled={loading || !game}
+              >
+                {autoPlay ? "Stop Auto Play" : "Auto Play"}
+              </button>
+              <button
+                className={showHeroMoves ? "primary" : "ghost"}
+                onClick={() => setShowHeroMoves((prev) => !prev)}
+                disabled={loading || !game || game.turn !== "HERO" || game.game_end}
+              >
+                {showHeroMoves ? "Hide Hero Moves" : "Show Hero Moves"}
               </button>
               <button className="danger" onClick={() => signal("quit")} disabled={loading || !canControl}>
                 Quit
@@ -557,6 +718,12 @@ export default function App() {
                 <div className="status-row"><span>Game End</span><strong>{String(game.game_end)}</strong></div>
                 <div className="status-row"><span>Winner</span><strong>{game.winner || "None"}</strong></div>
                 <div className="status-row"><span>Stopped By User</span><strong>{String(game.stopped_by_user)}</strong></div>
+                <div className="status-row"><span>Distance To Nearest Dot</span><strong>{game.nearest_dot_distance ?? "-"}</strong></div>
+                <div className="status-row"><span>Nearest Dot Position</span><strong>{formatPosition(game.nearest_dot_position)}</strong></div>
+                <div className="status-row"><span>Hero Distance From Ghost</span><strong>{game.hero_distance_from_ghost ?? "-"}</strong></div>
+                <div className="status-row"><span>Ghost Distance From Hero</span><strong>{game.ghost_distance_from_hero ?? "-"}</strong></div>
+                <div className="status-row"><span>Planned HERO Move (Minimax)</span><strong>{formatPosition(game.planned_hero_move)}</strong></div>
+                <div className="status-row"><span>Planned HERO Value</span><strong>{game.planned_hero_value == null ? "-" : Number(game.planned_hero_value).toFixed(2)}</strong></div>
                 <div className="status-row wide">
                   <span>Last Transition</span>
                   <strong>

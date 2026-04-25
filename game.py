@@ -5,7 +5,7 @@ import argparse
 import math
 import random
 
-maze_layout = [
+maze_layout2 = [
     "############################",
     "#............##............#",
     "#.####.#####.##.#####.####.#",
@@ -37,25 +37,58 @@ maze_layout = [
     "#..........................#",
     "############################",
 ]
+maze_layout = [
+    "###############",
+    "#.....#.....o.#",
+    "#.###.#.###.#.#",
+    "#.#.......#.#.#",
+    "#.#.#####.#.#.#",
+    "#...#...#...#.#",
+    "###...#...###.#",
+    "#...#.#.#.....#",
+    "#.###.#.###.#.#",
+    "#.....#.....#.#",
+    "#.#.#####.#.#.#",
+    "#o..#.....#..o#",
+    "#.###.###.###.#",
+    "#o....#.......#",
+    "###############",
+]
 base_maze_layout = list(maze_layout)
 maze = [list(row) for row in base_maze_layout]
 DOT_TILES = {'o'}
 TOTAL_DOTS = sum(row.count('o') for row in base_maze_layout)
-DEFAULT_THIRST = 1.0
-DEFAULT_COMMITMENT = 1.0
-DEFAULT_SAFETY = 1.0
+DEFAULT_PROGRESS_BONUS_MULTIPLIER = 50.0
+DEFAULT_DOT_REWARD_MULTIPLIER = 10.0
+DEFAULT_SURVIVAL_BONUS_MULTIPLIER = 2.0
+DEFAULT_MOBILITY_BONUS_MULTIPLIER = 3.0
+DEFAULT_DANGER_NEAR_PENALTY_MULTIPLIER = 1000.0
+DEFAULT_DANGER_MID_PENALTY_MULTIPLIER = 200.0
 
 hero_heuristic_multipliers = {
-    "thirst": DEFAULT_THIRST,
-    "commitment": DEFAULT_COMMITMENT,
-    "safety": DEFAULT_SAFETY,
+    "progress_bonus_multiplier": DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    "dot_reward_multiplier": DEFAULT_DOT_REWARD_MULTIPLIER,
+    "survival_bonus_multiplier": DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
+    "mobility_bonus_multiplier": DEFAULT_MOBILITY_BONUS_MULTIPLIER,
+    "danger_near_penalty_multiplier": DEFAULT_DANGER_NEAR_PENALTY_MULTIPLIER,
+    "danger_mid_penalty_multiplier": DEFAULT_DANGER_MID_PENALTY_MULTIPLIER,
 }
 
 
-def _set_hero_heuristic_multipliers(thirst, commitment, safety):
-    hero_heuristic_multipliers["thirst"] = max(0.0, float(thirst))
-    hero_heuristic_multipliers["commitment"] = max(0.0, float(commitment))
-    hero_heuristic_multipliers["safety"] = max(0.0, float(safety))
+def _set_hero_heuristic_multipliers(
+    progress_bonus_multiplier,
+    dot_reward_multiplier,
+    survival_bonus_multiplier,
+    mobility_bonus_multiplier,
+    danger_near_penalty_multiplier,
+    danger_mid_penalty_multiplier,
+):
+    hero_heuristic_multipliers["progress_bonus_multiplier"] = max(0.0, float(progress_bonus_multiplier))
+    hero_heuristic_multipliers["dot_reward_multiplier"] = max(0.0, float(dot_reward_multiplier))
+    hero_heuristic_multipliers["survival_bonus_multiplier"] = max(0.0, float(survival_bonus_multiplier))
+    hero_heuristic_multipliers["mobility_bonus_multiplier"] = max(0.0, float(mobility_bonus_multiplier))
+    hero_heuristic_multipliers["danger_near_penalty_multiplier"] = max(0.0, float(danger_near_penalty_multiplier))
+    hero_heuristic_multipliers["danger_mid_penalty_multiplier"] = max(0.0, float(danger_mid_penalty_multiplier))
 
 
 def _parse_float(value, fallback):
@@ -63,6 +96,42 @@ def _parse_float(value, fallback):
         return float(value)
     except (TypeError, ValueError):
         return float(fallback)
+
+
+def _is_walkable_in_layout(layout, position):
+    r, c = position
+    return (
+        0 <= r < len(layout)
+        and 0 <= c < len(layout[r])
+        and layout[r][c] != '#'
+    )
+
+
+def _all_walkable_positions(layout):
+    walkable = []
+    for r in range(len(layout)):
+        for c in range(len(layout[r])):
+            if layout[r][c] != '#':
+                walkable.append((r, c))
+    return walkable
+
+
+def _pick_spawn_positions(layout, preferred_hero=(23, 13), preferred_ghost=(11, 13)):
+    walkable = _all_walkable_positions(layout)
+    if not walkable:
+        raise ValueError("maze_layout has no walkable tiles (non-#).")
+
+    if _is_walkable_in_layout(layout, preferred_hero):
+        hero_start = preferred_hero
+    else:
+        hero_start = walkable[0]
+
+    if _is_walkable_in_layout(layout, preferred_ghost) and preferred_ghost != hero_start:
+        ghost_start = preferred_ghost
+    else:
+        ghost_start = next((pos for pos in walkable if pos != hero_start), hero_start)
+
+    return hero_start, (ghost_start,)
 
 
 def update_maze_from_state(state):
@@ -258,8 +327,7 @@ def initialize_game():
     ghost1_moves.clear()
     ghost2_moves.clear()
 
-    hero_start = (23, 13)
-    ghost_starts = [(11, 13)]
+    hero_start, ghost_starts = _pick_spawn_positions(base_maze_layout)
     dots = set()
     for r in range(len(base_maze_layout)):
         for c in range(len(base_maze_layout[r])):
@@ -273,7 +341,7 @@ def initialize_game():
 
     return _finalize_state(GameState(
         hero=hero_start,
-        ghosts=tuple(ghost_starts),
+        ghosts=ghost_starts,
         dots=frozenset(dots),
         turn="HERO",
         dice=0
@@ -283,26 +351,56 @@ def initialize_game():
 def heroistics(state):
     if state.game_end:
         if state.winner == "HERO":
-            return 10**9
+            return 1e9
         if state.winner == "GHOST":
-            return -(10**9)
+            return -1e9
 
-    hero_r, hero_c = state.hero
-    distance_to_dots = _shortest_path_distance(
-        (hero_r, hero_c), state.dots) if state.dots else 0
-    distance_to_ghost = _shortest_path_distance(
-        (hero_r, hero_c), set(state.ghosts)) if state.ghosts else 0
+    hero = state.hero
 
+    # Distances
+    dist_dot = _shortest_path_distance(hero, state.dots) if state.dots else 0
+    dist_ghost = _shortest_path_distance(hero, set(state.ghosts)) if state.ghosts else 999
+
+    # Progress
     dots_eaten = TOTAL_DOTS - len(state.dots)
-    thirst = hero_heuristic_multipliers["thirst"]
-    commitment = hero_heuristic_multipliers["commitment"]
-    safety = hero_heuristic_multipliers["safety"]
 
-    # New weighted structure requested from UI sliders.
+    # --- Key Improvements ---
+
+    progress_bonus_multiplier = hero_heuristic_multipliers["progress_bonus_multiplier"]
+    dot_reward_multiplier = hero_heuristic_multipliers["dot_reward_multiplier"]
+    survival_bonus_multiplier = hero_heuristic_multipliers["survival_bonus_multiplier"]
+    mobility_bonus_multiplier = hero_heuristic_multipliers["mobility_bonus_multiplier"]
+    danger_near_penalty_multiplier = hero_heuristic_multipliers["danger_near_penalty_multiplier"]
+    danger_mid_penalty_multiplier = hero_heuristic_multipliers["danger_mid_penalty_multiplier"]
+
+    # 1. Nonlinear danger (VERY important)
+    danger_penalty = 0
+    if dist_ghost <= 2:
+        danger_penalty = -danger_near_penalty_multiplier   # immediate danger
+    elif dist_ghost <= 4:
+        danger_penalty = -danger_mid_penalty_multiplier
+    else:
+        danger_penalty = 0
+
+    # 2. Encourage moving toward dots, but not blindly
+    dot_reward = dot_reward_multiplier / (dist_dot + 1)
+
+    # 3. Survival bonus (prefer staying alive longer)
+    survival_bonus = dist_ghost * survival_bonus_multiplier
+
+    # 4. Penalize being stuck / low mobility
+    mobility = len(_get_linear_moves(hero, 2))
+    mobility_bonus = mobility * mobility_bonus_multiplier
+
+    # 5. Reward finishing dots
+    progress_bonus = dots_eaten * progress_bonus_multiplier
+
     return (
-        thirst * dots_eaten
-        - commitment * distance_to_dots
-        + safety * distance_to_ghost
+        progress_bonus
+        + dot_reward
+        + survival_bonus
+        + mobility_bonus
+        + danger_penalty
     )
 
 
@@ -328,7 +426,13 @@ def _shortest_path_distance(start, targets):
         return 0
 
     rows = len(base_maze_layout)
-    cols = len(base_maze_layout[0])
+    max_cols = max((len(row) for row in base_maze_layout), default=0)
+    if rows == 0 or max_cols == 0:
+        return 0
+
+    if not _is_walkable(start):
+        return rows * max_cols
+
     queue = deque([(start[0], start[1], 0)])
     visited = {start}
 
@@ -339,7 +443,9 @@ def _shortest_path_distance(start, targets):
             nr, nc = r + dr, c + dc
             next_pos = (nr, nc)
 
-            if not (0 <= nr < rows and 0 <= nc < cols):
+            if not (0 <= nr < rows):
+                continue
+            if not (0 <= nc < len(base_maze_layout[nr])):
                 continue
             if base_maze_layout[nr][nc] == '#':
                 continue
@@ -353,7 +459,50 @@ def _shortest_path_distance(start, targets):
             queue.append((nr, nc, dist + 1))
 
     # Unreachable target fallback (should not happen on this map).
-    return rows * cols
+    return rows * max_cols
+
+
+def _nearest_target_and_distance(start, targets):
+    """Return (nearest_target, distance) from start over walkable tiles via BFS."""
+    if not targets:
+        return None, 0
+    if start in targets:
+        return start, 0
+
+    rows = len(base_maze_layout)
+    max_cols = max((len(row) for row in base_maze_layout), default=0)
+    if rows == 0 or max_cols == 0:
+        return None, 0
+
+    if not _is_walkable(start):
+        return None, rows * max_cols
+
+    queue = deque([(start[0], start[1], 0)])
+    visited = {start}
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    while queue:
+        r, c, dist = queue.popleft()
+        for dr, dc in directions:
+            nr, nc = r + dr, c + dc
+            next_pos = (nr, nc)
+
+            if not (0 <= nr < rows):
+                continue
+            if not (0 <= nc < len(base_maze_layout[nr])):
+                continue
+            if base_maze_layout[nr][nc] == '#':
+                continue
+            if next_pos in visited:
+                continue
+
+            if next_pos in targets:
+                return next_pos, dist + 1
+
+            visited.add(next_pos)
+            queue.append((nr, nc, dist + 1))
+
+    return None, rows * max_cols
 
 
 def _is_walkable(position):
@@ -383,6 +532,103 @@ def _get_linear_moves(start_position, steps):
     return candidates
 
 
+def _is_immediate_hero_loss(state, move, next_ghost_distance):
+    """Return True if moving HERO to move ends the game immediately with GHOST win."""
+    preview_state = move_hero(state, move, next_ghost_distance)
+    # move_hero updates global maze display during simulation; restore current state.
+    update_maze_from_state(state)
+    return preview_state.game_end and preview_state.winner == "GHOST"
+
+
+def _compute_hero_decision(state, max_depth):
+    """Precompute HERO move choice and per-move minimax values for current state."""
+    if state.turn != "HERO" or state.game_end:
+        return None
+
+    move_steps = _distance_for_turn("HERO", 0)
+    hero_candidates = _get_linear_moves(state.hero, move_steps)
+    if not hero_candidates:
+        return {
+            "best_move": list(state.hero),
+            "best_value": heroistics(state),
+            "evaluations": [],
+        }
+
+    next_ghost_distance = _distance_for_turn("GHOST1", 0)
+    evaluations = []
+    has_non_suicidal_candidate = False
+
+    for candidate in hero_candidates:
+        next_state = move_hero(state, candidate, next_ghost_distance)
+        is_suicidal = next_state.game_end and next_state.winner == "GHOST"
+        if not is_suicidal:
+            has_non_suicidal_candidate = True
+
+        if max_depth <= 1:
+            value = heroistics(next_state)
+        else:
+            value, _ = _minimax(next_state, max_depth - 1, False, 1, 0)
+
+        evaluations.append({
+            "position": [candidate[0], candidate[1]],
+            "heuristic": value,
+            "suicidal": is_suicidal,
+        })
+
+    update_maze_from_state(state)
+
+    ranked = sorted(evaluations, key=lambda item: item["heuristic"], reverse=True)
+    selectable = [item for item in ranked if not item["suicidal"]] if has_non_suicidal_candidate else ranked
+    best = selectable[0]
+
+    return {
+        "best_move": list(best["position"]),
+        "best_value": best["heuristic"],
+        "evaluations": ranked,
+    }
+
+
+def _hero_decision_signature(state, minimax_depth):
+    return (
+        state,
+        int(minimax_depth),
+        hero_heuristic_multipliers["progress_bonus_multiplier"],
+        hero_heuristic_multipliers["dot_reward_multiplier"],
+        hero_heuristic_multipliers["survival_bonus_multiplier"],
+        hero_heuristic_multipliers["mobility_bonus_multiplier"],
+        hero_heuristic_multipliers["danger_near_penalty_multiplier"],
+        hero_heuristic_multipliers["danger_mid_penalty_multiplier"],
+        tuple(hero_moves),
+        tuple(ghost1_moves),
+    )
+
+
+def _refresh_pending_hero_decision():
+    state = backend_session.get("state")
+    if state is None:
+        backend_session["pending_hero_decision"] = None
+        backend_session["pending_hero_signature"] = None
+        return
+
+    if state.game_end or state.turn != "HERO" or backend_session.get("stopped_by_user"):
+        backend_session["pending_hero_decision"] = None
+        backend_session["pending_hero_signature"] = None
+        return
+
+    signature = _hero_decision_signature(state, backend_session["minimax_depth"])
+    if (
+        backend_session.get("pending_hero_decision") is not None
+        and backend_session.get("pending_hero_signature") == signature
+    ):
+        return
+
+    backend_session["pending_hero_decision"] = _compute_hero_decision(
+        state,
+        backend_session["minimax_depth"],
+    )
+    backend_session["pending_hero_signature"] = signature
+
+
 def _minimax(state, depth, is_hero_turn, hero_turn_index=0, ghost_turn_index=0):
     if depth == 0 or state.game_end:
         return heroistics(state), None
@@ -393,13 +639,27 @@ def _minimax(state, depth, is_hero_turn, hero_turn_index=0, ghost_turn_index=0):
         if not hero_candidates:
             return heroistics(state), state.hero
 
+        next_ghost_distance = _distance_for_turn("GHOST1", ghost_turn_index)
+        simulated_candidates = []
+        has_non_suicidal_candidate = False
+
+        for candidate in hero_candidates:
+            next_state = move_hero(state, candidate, next_ghost_distance)
+            is_suicidal = next_state.game_end and next_state.winner == "GHOST"
+            if not is_suicidal:
+                has_non_suicidal_candidate = True
+            simulated_candidates.append((candidate, next_state, is_suicidal))
+
+        # Minimax simulations mutate maze display globally; restore current state before recursion.
+        update_maze_from_state(state)
+
         best_value = float('-inf')
         best_move = hero_candidates[0]
 
-        for candidate in hero_candidates:
-            next_ghost_distance = _distance_for_turn(
-                "GHOST1", ghost_turn_index)
-            next_state = move_hero(state, candidate, next_ghost_distance)
+        for candidate, next_state, is_suicidal in simulated_candidates:
+            if has_non_suicidal_candidate and is_suicidal:
+                continue
+
             value, _ = _minimax(
                 next_state,
                 depth - 1,
@@ -640,15 +900,34 @@ def _mcts_ghost_move(state, max_depth=8, iterations=200, exploration_constant=1.
     return best_child.move
 
 
-def _step_game_state(state, minimax_depth, ghost_mcts_depth, ghost_mcts_iterations):
+def _step_game_state(state, minimax_depth, ghost_mcts_depth, ghost_mcts_iterations, precomputed_hero_move=None):
     """Advance the game by exactly one turn and return transition metadata."""
     if state.game_end:
         return state, {"actor": None, "move": None, "distance": None}
 
     if state.turn == "HERO":
-        best_move, _ = minimax_hero_move(state, minimax_depth)
+        if precomputed_hero_move is not None:
+            best_move = tuple(precomputed_hero_move)
+        else:
+            best_move, _ = minimax_hero_move(state, minimax_depth)
         hero_distance = get_next_move("HERO")
         next_ghost_distance = _distance_for_turn("GHOST1", 0)
+
+        # Final runtime guard: if minimax selected a suicidal move while safe options exist,
+        # prefer the best safe one by immediate heroistics.
+        if _is_immediate_hero_loss(state, best_move, next_ghost_distance):
+            hero_candidates = _get_linear_moves(state.hero, hero_distance)
+            safe_candidates = [
+                move for move in hero_candidates
+                if not _is_immediate_hero_loss(state, move, next_ghost_distance)
+            ]
+            if safe_candidates:
+                best_move = max(
+                    safe_candidates,
+                    key=lambda move: heroistics(move_hero(state, move, next_ghost_distance)),
+                )
+                update_maze_from_state(state)
+
         next_state = move_hero(state, best_move, next_ghost_distance)
         return next_state, {
             "actor": "HERO",
@@ -672,8 +951,110 @@ def _step_game_state(state, minimax_depth, ghost_mcts_depth, ghost_mcts_iteratio
     }
 
 
-def _serialize_state(state, turn_count, stopped_by_user=False, last_transition=None):
+def _evaluate_hero_moves(state):
+    """Return one-ply HERO move options and resulting heuristic values."""
+    if state.turn != "HERO" or state.game_end:
+        return []
+
+    hero_distance = _distance_for_turn("HERO", 0)
+    hero_candidates = _get_linear_moves(state.hero, hero_distance)
+    if not hero_candidates:
+        return []
+
+    next_ghost_distance = _distance_for_turn("GHOST1", 0)
+    evaluations = []
+    for move in hero_candidates:
+        next_state = move_hero(state, move, next_ghost_distance)
+        evaluations.append({
+            "position": [move[0], move[1]],
+            "heuristic": heroistics(next_state),
+        })
+
+    # Restore displayed maze after simulated evaluations.
     update_maze_from_state(state)
+
+    evaluations.sort(key=lambda item: item["heuristic"], reverse=True)
+    return evaluations
+
+
+def _capture_undo_snapshot():
+    return {
+        "state": backend_session["state"],
+        "turn_count": backend_session["turn_count"],
+        "stopped_by_user": backend_session["stopped_by_user"],
+        "last_transition": backend_session["last_transition"],
+        "hero_moves": list(hero_moves),
+        "ghost1_moves": list(ghost1_moves),
+        "ghost2_moves": list(ghost2_moves),
+        "progress_bonus_multiplier": backend_session["progress_bonus_multiplier"],
+        "dot_reward_multiplier": backend_session["dot_reward_multiplier"],
+        "survival_bonus_multiplier": backend_session["survival_bonus_multiplier"],
+        "mobility_bonus_multiplier": backend_session["mobility_bonus_multiplier"],
+        "danger_near_penalty_multiplier": backend_session["danger_near_penalty_multiplier"],
+        "danger_mid_penalty_multiplier": backend_session["danger_mid_penalty_multiplier"],
+    }
+
+
+def _restore_undo_snapshot(snapshot):
+    backend_session["state"] = snapshot["state"]
+    backend_session["turn_count"] = snapshot["turn_count"]
+    backend_session["stopped_by_user"] = snapshot["stopped_by_user"]
+    backend_session["last_transition"] = snapshot["last_transition"]
+    backend_session["progress_bonus_multiplier"] = snapshot["progress_bonus_multiplier"]
+    backend_session["dot_reward_multiplier"] = snapshot["dot_reward_multiplier"]
+    backend_session["survival_bonus_multiplier"] = snapshot["survival_bonus_multiplier"]
+    backend_session["mobility_bonus_multiplier"] = snapshot["mobility_bonus_multiplier"]
+    backend_session["danger_near_penalty_multiplier"] = snapshot["danger_near_penalty_multiplier"]
+    backend_session["danger_mid_penalty_multiplier"] = snapshot["danger_mid_penalty_multiplier"]
+
+    hero_moves.clear()
+    hero_moves.extend(snapshot["hero_moves"])
+    ghost1_moves.clear()
+    ghost1_moves.extend(snapshot["ghost1_moves"])
+    ghost2_moves.clear()
+    ghost2_moves.extend(snapshot["ghost2_moves"])
+
+    _set_hero_heuristic_multipliers(
+        backend_session["progress_bonus_multiplier"],
+        backend_session["dot_reward_multiplier"],
+        backend_session["survival_bonus_multiplier"],
+        backend_session["mobility_bonus_multiplier"],
+        backend_session["danger_near_penalty_multiplier"],
+        backend_session["danger_mid_penalty_multiplier"],
+    )
+
+    update_maze_from_state(backend_session["state"])
+
+
+def _serialize_state(
+    state,
+    turn_count,
+    stopped_by_user=False,
+    last_transition=None,
+    hero_move_evaluations=None,
+    planned_hero_move=None,
+    planned_hero_value=None,
+):
+    update_maze_from_state(state)
+
+    nearest_dot_position, nearest_dot_distance = _nearest_target_and_distance(
+        state.hero,
+        state.dots,
+    ) if state.dots else (None, 0)
+
+    hero_distance_from_ghost = _shortest_path_distance(
+        state.hero,
+        set(state.ghosts),
+    ) if state.ghosts else 999
+
+    ghost_distance_from_hero = _shortest_path_distance(
+        state.ghosts[0],
+        {state.hero},
+    ) if state.ghosts else 999
+
+    if hero_move_evaluations is None:
+        hero_move_evaluations = _evaluate_hero_moves(state)
+
     return {
         "maze_layout": maze_layout,
         "hero": list(state.hero),
@@ -687,10 +1068,20 @@ def _serialize_state(state, turn_count, stopped_by_user=False, last_transition=N
         "turn_count": turn_count,
         "stopped_by_user": stopped_by_user,
         "last_transition": last_transition,
+        "nearest_dot_distance": nearest_dot_distance,
+        "nearest_dot_position": list(nearest_dot_position) if nearest_dot_position else None,
+        "hero_distance_from_ghost": hero_distance_from_ghost,
+        "ghost_distance_from_hero": ghost_distance_from_hero,
+        "hero_move_evaluations": hero_move_evaluations,
+        "planned_hero_move": planned_hero_move,
+        "planned_hero_value": planned_hero_value,
         "hero_multipliers": {
-            "thirst": hero_heuristic_multipliers["thirst"],
-            "commitment": hero_heuristic_multipliers["commitment"],
-            "safety": hero_heuristic_multipliers["safety"],
+            "progress_bonus_multiplier": hero_heuristic_multipliers["progress_bonus_multiplier"],
+            "dot_reward_multiplier": hero_heuristic_multipliers["dot_reward_multiplier"],
+            "survival_bonus_multiplier": hero_heuristic_multipliers["survival_bonus_multiplier"],
+            "mobility_bonus_multiplier": hero_heuristic_multipliers["mobility_bonus_multiplier"],
+            "danger_near_penalty_multiplier": hero_heuristic_multipliers["danger_near_penalty_multiplier"],
+            "danger_mid_penalty_multiplier": hero_heuristic_multipliers["danger_mid_penalty_multiplier"],
         },
     }
 
@@ -702,10 +1093,16 @@ backend_session = {
     "minimax_depth": 4,
     "ghost_mcts_depth": 8,
     "ghost_mcts_iterations": 200,
-    "thirst": DEFAULT_THIRST,
-    "commitment": DEFAULT_COMMITMENT,
-    "safety": DEFAULT_SAFETY,
+    "progress_bonus_multiplier": DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    "dot_reward_multiplier": DEFAULT_DOT_REWARD_MULTIPLIER,
+    "survival_bonus_multiplier": DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
+    "mobility_bonus_multiplier": DEFAULT_MOBILITY_BONUS_MULTIPLIER,
+    "danger_near_penalty_multiplier": DEFAULT_DANGER_NEAR_PENALTY_MULTIPLIER,
+    "danger_mid_penalty_multiplier": DEFAULT_DANGER_MID_PENALTY_MULTIPLIER,
     "last_transition": None,
+    "history": [],
+    "pending_hero_decision": None,
+    "pending_hero_signature": None,
 }
 
 
@@ -713,9 +1110,12 @@ def _reset_backend_session(
     minimax_depth=4,
     ghost_mcts_depth=8,
     ghost_mcts_iterations=200,
-    thirst=DEFAULT_THIRST,
-    commitment=DEFAULT_COMMITMENT,
-    safety=DEFAULT_SAFETY,
+    progress_bonus_multiplier=DEFAULT_PROGRESS_BONUS_MULTIPLIER,
+    dot_reward_multiplier=DEFAULT_DOT_REWARD_MULTIPLIER,
+    survival_bonus_multiplier=DEFAULT_SURVIVAL_BONUS_MULTIPLIER,
+    mobility_bonus_multiplier=DEFAULT_MOBILITY_BONUS_MULTIPLIER,
+    danger_near_penalty_multiplier=DEFAULT_DANGER_NEAR_PENALTY_MULTIPLIER,
+    danger_mid_penalty_multiplier=DEFAULT_DANGER_MID_PENALTY_MULTIPLIER,
 ):
     backend_session["state"] = initialize_game()
     backend_session["turn_count"] = 0
@@ -724,14 +1124,23 @@ def _reset_backend_session(
     backend_session["ghost_mcts_depth"] = ghost_mcts_depth
     backend_session["ghost_mcts_iterations"] = ghost_mcts_iterations
     _set_hero_heuristic_multipliers(
-        thirst,
-        commitment,
-        safety,
+        progress_bonus_multiplier,
+        dot_reward_multiplier,
+        survival_bonus_multiplier,
+        mobility_bonus_multiplier,
+        danger_near_penalty_multiplier,
+        danger_mid_penalty_multiplier,
     )
-    backend_session["thirst"] = hero_heuristic_multipliers["thirst"]
-    backend_session["commitment"] = hero_heuristic_multipliers["commitment"]
-    backend_session["safety"] = hero_heuristic_multipliers["safety"]
+    backend_session["progress_bonus_multiplier"] = hero_heuristic_multipliers["progress_bonus_multiplier"]
+    backend_session["dot_reward_multiplier"] = hero_heuristic_multipliers["dot_reward_multiplier"]
+    backend_session["survival_bonus_multiplier"] = hero_heuristic_multipliers["survival_bonus_multiplier"]
+    backend_session["mobility_bonus_multiplier"] = hero_heuristic_multipliers["mobility_bonus_multiplier"]
+    backend_session["danger_near_penalty_multiplier"] = hero_heuristic_multipliers["danger_near_penalty_multiplier"]
+    backend_session["danger_mid_penalty_multiplier"] = hero_heuristic_multipliers["danger_mid_penalty_multiplier"]
     backend_session["last_transition"] = None
+    backend_session["history"] = []
+    backend_session["pending_hero_decision"] = None
+    backend_session["pending_hero_signature"] = None
 
 
 def _ensure_backend_session():
@@ -740,10 +1149,27 @@ def _ensure_backend_session():
             backend_session["minimax_depth"],
             backend_session["ghost_mcts_depth"],
             backend_session["ghost_mcts_iterations"],
-            backend_session["thirst"],
-            backend_session["commitment"],
-            backend_session["safety"],
+            backend_session["progress_bonus_multiplier"],
+            backend_session["dot_reward_multiplier"],
+            backend_session["survival_bonus_multiplier"],
+            backend_session["mobility_bonus_multiplier"],
+            backend_session["danger_near_penalty_multiplier"],
+            backend_session["danger_mid_penalty_multiplier"],
         )
+
+
+def _serialize_backend_payload():
+    _refresh_pending_hero_decision()
+    pending = backend_session.get("pending_hero_decision") or {}
+    return _serialize_state(
+        backend_session["state"],
+        backend_session["turn_count"],
+        backend_session["stopped_by_user"],
+        backend_session["last_transition"],
+        pending.get("evaluations", []),
+        pending.get("best_move"),
+        pending.get("best_value"),
+    )
 
 
 def create_app():
@@ -756,12 +1182,7 @@ def create_app():
     @app.get("/api/state")
     def get_state():
         _ensure_backend_session()
-        payload = _serialize_state(
-            backend_session["state"],
-            backend_session["turn_count"],
-            backend_session["stopped_by_user"],
-            backend_session["last_transition"],
-        )
+        payload = _serialize_backend_payload()
         return jsonify(payload)
 
     @app.post("/api/start")
@@ -773,28 +1194,44 @@ def create_app():
             body.get("ghost_mcts_depth", backend_session["ghost_mcts_depth"]))
         ghost_mcts_iterations = int(
             body.get("ghost_mcts_iterations", backend_session["ghost_mcts_iterations"]))
-        thirst = _parse_float(
-            body.get("thirst", backend_session["thirst"]), backend_session["thirst"])
-        commitment = _parse_float(body.get(
-            "commitment", backend_session["commitment"]), backend_session["commitment"])
-        safety = _parse_float(
-            body.get("safety", backend_session["safety"]), backend_session["safety"])
+        progress_bonus_multiplier = _parse_float(
+            body.get("progress_bonus_multiplier", backend_session["progress_bonus_multiplier"]),
+            backend_session["progress_bonus_multiplier"],
+        )
+        dot_reward_multiplier = _parse_float(
+            body.get("dot_reward_multiplier", backend_session["dot_reward_multiplier"]),
+            backend_session["dot_reward_multiplier"],
+        )
+        survival_bonus_multiplier = _parse_float(
+            body.get("survival_bonus_multiplier", backend_session["survival_bonus_multiplier"]),
+            backend_session["survival_bonus_multiplier"],
+        )
+        mobility_bonus_multiplier = _parse_float(
+            body.get("mobility_bonus_multiplier", backend_session["mobility_bonus_multiplier"]),
+            backend_session["mobility_bonus_multiplier"],
+        )
+        danger_near_penalty_multiplier = _parse_float(
+            body.get("danger_near_penalty_multiplier", backend_session["danger_near_penalty_multiplier"]),
+            backend_session["danger_near_penalty_multiplier"],
+        )
+        danger_mid_penalty_multiplier = _parse_float(
+            body.get("danger_mid_penalty_multiplier", backend_session["danger_mid_penalty_multiplier"]),
+            backend_session["danger_mid_penalty_multiplier"],
+        )
 
         _reset_backend_session(
             minimax_depth,
             ghost_mcts_depth,
             ghost_mcts_iterations,
-            thirst,
-            commitment,
-            safety,
+            progress_bonus_multiplier,
+            dot_reward_multiplier,
+            survival_bonus_multiplier,
+            mobility_bonus_multiplier,
+            danger_near_penalty_multiplier,
+            danger_mid_penalty_multiplier,
         )
 
-        payload = _serialize_state(
-            backend_session["state"],
-            backend_session["turn_count"],
-            backend_session["stopped_by_user"],
-            backend_session["last_transition"],
-        )
+        payload = _serialize_backend_payload()
         return jsonify(payload)
 
     @app.post("/api/signal")
@@ -805,24 +1242,40 @@ def create_app():
 
         _set_hero_heuristic_multipliers(
             _parse_float(
-                body.get("thirst", backend_session["thirst"]), backend_session["thirst"]),
-            _parse_float(body.get(
-                "commitment", backend_session["commitment"]), backend_session["commitment"]),
+                body.get("progress_bonus_multiplier", backend_session["progress_bonus_multiplier"]),
+                backend_session["progress_bonus_multiplier"],
+            ),
             _parse_float(
-                body.get("safety", backend_session["safety"]), backend_session["safety"]),
+                body.get("dot_reward_multiplier", backend_session["dot_reward_multiplier"]),
+                backend_session["dot_reward_multiplier"],
+            ),
+            _parse_float(
+                body.get("survival_bonus_multiplier", backend_session["survival_bonus_multiplier"]),
+                backend_session["survival_bonus_multiplier"],
+            ),
+            _parse_float(
+                body.get("mobility_bonus_multiplier", backend_session["mobility_bonus_multiplier"]),
+                backend_session["mobility_bonus_multiplier"],
+            ),
+            _parse_float(
+                body.get("danger_near_penalty_multiplier", backend_session["danger_near_penalty_multiplier"]),
+                backend_session["danger_near_penalty_multiplier"],
+            ),
+            _parse_float(
+                body.get("danger_mid_penalty_multiplier", backend_session["danger_mid_penalty_multiplier"]),
+                backend_session["danger_mid_penalty_multiplier"],
+            ),
         )
-        backend_session["thirst"] = hero_heuristic_multipliers["thirst"]
-        backend_session["commitment"] = hero_heuristic_multipliers["commitment"]
-        backend_session["safety"] = hero_heuristic_multipliers["safety"]
+        backend_session["progress_bonus_multiplier"] = hero_heuristic_multipliers["progress_bonus_multiplier"]
+        backend_session["dot_reward_multiplier"] = hero_heuristic_multipliers["dot_reward_multiplier"]
+        backend_session["survival_bonus_multiplier"] = hero_heuristic_multipliers["survival_bonus_multiplier"]
+        backend_session["mobility_bonus_multiplier"] = hero_heuristic_multipliers["mobility_bonus_multiplier"]
+        backend_session["danger_near_penalty_multiplier"] = hero_heuristic_multipliers["danger_near_penalty_multiplier"]
+        backend_session["danger_mid_penalty_multiplier"] = hero_heuristic_multipliers["danger_mid_penalty_multiplier"]
 
         if action in {"quit", "exit", "stop"}:
             backend_session["stopped_by_user"] = True
-            payload = _serialize_state(
-                backend_session["state"],
-                backend_session["turn_count"],
-                backend_session["stopped_by_user"],
-                backend_session["last_transition"],
-            )
+            payload = _serialize_backend_payload()
             return jsonify(payload)
 
         if action != "continue":
@@ -830,30 +1283,49 @@ def create_app():
 
         state = backend_session["state"]
         if state.game_end or backend_session["stopped_by_user"]:
-            payload = _serialize_state(
-                state,
-                backend_session["turn_count"],
-                backend_session["stopped_by_user"],
-                backend_session["last_transition"],
-            )
+            payload = _serialize_backend_payload()
             return jsonify(payload)
+
+        snapshot = _capture_undo_snapshot()
+        precomputed_hero_move = None
+        if state.turn == "HERO":
+            _refresh_pending_hero_decision()
+            pending = backend_session.get("pending_hero_decision")
+            if pending and pending.get("best_move") is not None:
+                precomputed_hero_move = tuple(pending["best_move"])
 
         next_state, transition = _step_game_state(
             state,
             backend_session["minimax_depth"],
             backend_session["ghost_mcts_depth"],
             backend_session["ghost_mcts_iterations"],
+            precomputed_hero_move,
         )
+        backend_session["history"].append(snapshot)
+        if len(backend_session["history"]) > 500:
+            backend_session["history"] = backend_session["history"][-500:]
         backend_session["state"] = next_state
         backend_session["turn_count"] += 1
         backend_session["last_transition"] = transition
+        backend_session["pending_hero_decision"] = None
+        backend_session["pending_hero_signature"] = None
 
-        payload = _serialize_state(
-            backend_session["state"],
-            backend_session["turn_count"],
-            backend_session["stopped_by_user"],
-            backend_session["last_transition"],
-        )
+        payload = _serialize_backend_payload()
+        return jsonify(payload)
+
+    @app.post("/api/undo")
+    def undo_game():
+        _ensure_backend_session()
+
+        if not backend_session["history"]:
+            return jsonify({"error": "No previous move to undo."}), 400
+
+        snapshot = backend_session["history"].pop()
+        _restore_undo_snapshot(snapshot)
+        backend_session["pending_hero_decision"] = None
+        backend_session["pending_hero_signature"] = None
+
+        payload = _serialize_backend_payload()
         return jsonify(payload)
 
     return app

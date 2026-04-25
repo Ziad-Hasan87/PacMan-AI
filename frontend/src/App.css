@@ -506,6 +506,40 @@ button:disabled {
   animation: hop-step 0.24s ease-out;
 }
 
+.cell.nearest-dot-target {
+  outline: 2px solid rgba(255, 80, 80, 0.95);
+  outline-offset: -2px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 188, 188, 0.95),
+    0 0 8px rgba(255, 90, 90, 0.75);
+}
+
+.cell.nearest-dot-target::before {
+  background-image:
+    linear-gradient(to right, transparent 44%, rgba(255, 72, 72, 0.95) 44%, rgba(255, 72, 72, 0.95) 56%, transparent 56%),
+    linear-gradient(to bottom, transparent 44%, rgba(255, 72, 72, 0.95) 44%, rgba(255, 72, 72, 0.95) 56%, transparent 56%),
+    var(--tile-base);
+}
+
+.cell.hero-move-option {
+  box-shadow: inset 0 0 0 1px rgba(57, 197, 187, 0.75);
+}
+
+.move-hint-label {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Sora", "Space Grotesk", sans-serif;
+  font-size: clamp(8px, calc(var(--tile-size) * 0.33), 12px);
+  font-weight: 700;
+  color: #f5fffb;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(20, 66, 97, 0.95);
+  pointer-events: none;
+}
+
 @keyframes hero-idle {
   0%,
   100% {
