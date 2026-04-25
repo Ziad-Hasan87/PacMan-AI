@@ -168,6 +168,24 @@ function formatPosition(position) {
   return `[${position[0]}, ${position[1]}]`;
 }
 
+function formatHeuristicValue(value, winner, digits = null) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "-";
+  }
+
+  if (Math.abs(numericValue) >= 1e9) {
+    if (winner === "HERO") return "You Win";
+    if (winner === "GHOST") return "Game Over";
+  }
+
+  return digits == null ? String(numericValue) : numericValue.toFixed(digits);
+}
+
 export default function App() {
   const [game, setGame] = useState(null);
   const [visual, setVisual] = useState(null);
@@ -185,15 +203,16 @@ export default function App() {
   const [minimaxDepth, setMinimaxDepth] = useState(4);
   const [ghostMctsDepth, setGhostMctsDepth] = useState(8);
   const [ghostMctsIterations, setGhostMctsIterations] = useState(200);
-  const [progressBonusMultiplier, setProgressBonusMultiplier] = useState(50);
-  const [distancePenaltyMultiplier, setDistancePenaltyMultiplier] = useState(1);
-  const [dotRewardMultiplier, setDotRewardMultiplier] = useState(10);
+  const [progressBonusMultiplier, setProgressBonusMultiplier] = useState(70);
+  const [distancePenaltyMultiplier, setDistancePenaltyMultiplier] = useState(1.5);
+  const [dotRewardMultiplier, setDotRewardMultiplier] = useState(15);
   const [survivalBonusMultiplier, setSurvivalBonusMultiplier] = useState(2);
-  const [mobilityBonusMultiplier, setMobilityBonusMultiplier] = useState(3);
+  const [mobilityBonusMultiplier, setMobilityBonusMultiplier] = useState(2);
   const [dangerNearPenaltyMultiplier, setDangerNearPenaltyMultiplier] = useState(1000);
   const [dangerMidPenaltyMultiplier, setDangerMidPenaltyMultiplier] = useState(200);
   const [autoPlay, setAutoPlay] = useState(false);
   const [showHeroMoves, setShowHeroMoves] = useState(false);
+  const [showGhostMoves, setShowGhostMoves] = useState(false);
 
   useEffect(() => {
     void refreshState();
@@ -407,6 +426,17 @@ export default function App() {
     return map;
   }, [game?.hero_move_evaluations]);
 
+  const ghostMoveHints = useMemo(() => {
+    const entries = game?.ghost_move_evaluations || [];
+    const map = new Map();
+    for (const entry of entries) {
+      const pos = entry?.position;
+      if (!Array.isArray(pos) || pos.length !== 2) continue;
+      map.set(`${pos[0]}-${pos[1]}`, entry.heuristic);
+    }
+    return map;
+  }, [game?.ghost_move_evaluations]);
+
   useEffect(() => {
     if (!autoPlay || loading || !canControl) {
       return;
@@ -514,17 +544,22 @@ export default function App() {
                     const hasHeroHint = showHeroMoves && heroMoveHints.has(hintKey);
                     const heroHintClass = hasHeroHint ? " hero-move-option" : "";
                     const heroHintValue = hasHeroHint ? heroMoveHints.get(hintKey) : null;
+                    const hasGhostHint = showGhostMoves && game?.turn === "GHOST" && ghostMoveHints.has(hintKey);
+                    const ghostHintClass = hasGhostHint ? " ghost-move-option" : "";
+                    const ghostHintValue = hasGhostHint ? ghostMoveHints.get(hintKey) : null;
 
                     return (
                       <span
                         key={`${r}-${c}`}
-                        className={`${cellClass(displayChar)}${movingClass}${nearestDotClass}${heroHintClass}`}
+                        className={`${cellClass(displayChar)}${movingClass}${nearestDotClass}${heroHintClass}${ghostHintClass}`}
                         style={cellStyle(displayChar, r, c, boardRows)}
                         title={`(${r}, ${c}) ${displayChar === " " ? "floor" : displayChar}`}
                         aria-label={`${displayChar === " " ? "floor" : displayChar} at row ${r}, col ${c}`}
                       >
                         {hasHeroHint ? (
-                          <span className="move-hint-label">{Number(heroHintValue).toFixed(1)}</span>
+                          <span className="move-hint-label">{formatHeuristicValue(heroHintValue, Number(heroHintValue) >= 0 ? "HERO" : "GHOST", 1)}</span>
+                        ) : hasGhostHint ? (
+                          <span className="move-hint-label">{formatHeuristicValue(ghostHintValue, Number(ghostHintValue) >= 0 ? "HERO" : "GHOST", 1)}</span>
                         ) : null}
                       </span>
                     );
@@ -583,7 +618,7 @@ export default function App() {
                   />
                   <output>{progressBonusMultiplier.toFixed(0)}</output>
                 </div>
-                <small>Default 50. Higher value rewards each collected dot more.</small>
+                <small>Default 70. Higher value rewards each collected dot more.</small>
               </label>
               <label className="slider-control">
                 Distance Penalty Multiplier
@@ -598,7 +633,7 @@ export default function App() {
                   />
                   <output>{distancePenaltyMultiplier.toFixed(1)}</output>
                 </div>
-                <small>Default 1. Raises the linear penalty for farther dots.</small>
+                <small>Default 1.5. Raises the linear penalty for farther dots.</small>
               </label>
               <label className="slider-control">
                 Dot Reward Multiplier
@@ -613,7 +648,7 @@ export default function App() {
                   />
                   <output>{dotRewardMultiplier.toFixed(1)}</output>
                 </div>
-                <small>Default 10. Scales reward for being close to dots.</small>
+                <small>Default 15. Scales reward for being close to dots.</small>
               </label>
               <label className="slider-control">
                 Survival Bonus Multiplier
@@ -643,7 +678,7 @@ export default function App() {
                   />
                   <output>{mobilityBonusMultiplier.toFixed(1)}</output>
                 </div>
-                <small>Default 3. Rewards positions with more immediate options.</small>
+                <small>Default 2. Rewards positions with more immediate options.</small>
               </label>
               <label className="slider-control">
                 Danger Near Penalty Multiplier
@@ -699,6 +734,13 @@ export default function App() {
               >
                 {showHeroMoves ? "Hide Hero Moves" : "Show Hero Moves"}
               </button>
+              <button
+                className={showGhostMoves ? "primary" : "ghost"}
+                onClick={() => setShowGhostMoves((prev) => !prev)}
+                disabled={loading || !game || game.turn !== "GHOST" || game.game_end}
+              >
+                {showGhostMoves ? "Hide Ghost Moves" : "Show Ghost Moves"}
+              </button>
               <button className="danger" onClick={() => signal("quit")} disabled={loading || !canControl}>
                 Quit
               </button>
@@ -721,12 +763,12 @@ export default function App() {
             </article>
             <article className="panel metric-card">
               <span className="metric-label">Hero Heuristic</span>
-              <strong>{game?.hero_heuristic ?? "-"}</strong>
+              <strong>{formatHeuristicValue(game?.hero_heuristic, game?.winner)}</strong>
               <small>Higher is better for hero</small>
             </article>
             <article className="panel metric-card">
               <span className="metric-label">Ghost Heuristic</span>
-              <strong>{game?.ghost_heuristic ?? "-"}</strong>
+              <strong>{formatHeuristicValue(game?.ghost_heuristic, game?.winner)}</strong>
               <small>Higher is better for ghost</small>
             </article>
           </section>
@@ -744,7 +786,9 @@ export default function App() {
                 <div className="status-row"><span>Hero Distance From Ghost</span><strong>{game.hero_distance_from_ghost ?? "-"}</strong></div>
                 <div className="status-row"><span>Ghost Distance From Hero</span><strong>{game.ghost_distance_from_hero ?? "-"}</strong></div>
                 <div className="status-row"><span>Planned HERO Move (Minimax)</span><strong>{formatPosition(game.planned_hero_move)}</strong></div>
-                <div className="status-row"><span>Planned HERO Value</span><strong>{game.planned_hero_value == null ? "-" : Number(game.planned_hero_value).toFixed(2)}</strong></div>
+                <div className="status-row"><span>Planned HERO Value</span><strong>{formatHeuristicValue(game.planned_hero_value, game.winner, 2)}</strong></div>
+                <div className="status-row"><span>Planned GHOST Move (MCTS)</span><strong>{formatPosition(game.planned_ghost_move)}</strong></div>
+                <div className="status-row"><span>Planned GHOST Value</span><strong>{formatHeuristicValue(game.planned_ghost_value, game.winner, 2)}</strong></div>
                 <div className="status-row wide">
                   <span>Last Transition</span>
                   <strong>

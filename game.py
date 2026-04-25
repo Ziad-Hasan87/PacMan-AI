@@ -58,11 +58,11 @@ base_maze_layout = list(maze_layout)
 maze = [list(row) for row in base_maze_layout]
 DOT_TILES = {'o'}
 TOTAL_DOTS = sum(row.count('o') for row in base_maze_layout)
-DEFAULT_PROGRESS_BONUS_MULTIPLIER = 50.0
-DEFAULT_DISTANCE_PENALTY_MULTIPLIER = 1.0
-DEFAULT_DOT_REWARD_MULTIPLIER = 10.0
+DEFAULT_PROGRESS_BONUS_MULTIPLIER = 70.0
+DEFAULT_DISTANCE_PENALTY_MULTIPLIER = 1.5
+DEFAULT_DOT_REWARD_MULTIPLIER = 15.0
 DEFAULT_SURVIVAL_BONUS_MULTIPLIER = 2.0
-DEFAULT_MOBILITY_BONUS_MULTIPLIER = 3.0
+DEFAULT_MOBILITY_BONUS_MULTIPLIER = 2.0
 DEFAULT_DANGER_NEAR_PENALTY_MULTIPLIER = 1000.0
 DEFAULT_DANGER_MID_PENALTY_MULTIPLIER = 200.0
 
@@ -600,6 +600,49 @@ def _compute_hero_decision(state, max_depth):
     }
 
 
+def _compute_ghost_decision(state, max_depth, iterations):
+    """Precompute GHOST move choice and per-move heuristic values for current state."""
+    if state.turn != "GHOST" or state.game_end:
+        return None
+
+    ghost_candidates = _legal_moves_for_state(state, 0, 0)
+    if not ghost_candidates:
+        return {
+            "best_move": list(state.ghosts[0]),
+            "best_value": ghost_heuristic(state),
+            "evaluations": [],
+        }
+
+    evaluations = []
+    for candidate in ghost_candidates:
+        next_state, next_hero_index, next_ghost_index = _apply_turn_move(state, candidate, 0, 0)
+        shortest_path_distance = _shortest_path_distance(candidate, {state.hero})
+        value = _rollout_ghost_value(
+            next_state,
+            next_hero_index,
+            next_ghost_index,
+            1,
+            max_depth,
+        )
+        evaluations.append({
+            "position": [candidate[0], candidate[1]],
+            "heuristic": value,
+            "distance": shortest_path_distance,
+        })
+
+    ranked = sorted(
+        evaluations,
+        key=lambda item: (-item["heuristic"], item["distance"], item["position"][0], item["position"][1]),
+    )
+    best_entry = ranked[0]
+
+    return {
+        "best_move": list(best_entry["position"]),
+        "best_value": best_entry["heuristic"],
+        "evaluations": ranked,
+    }
+
+
 def _hero_decision_signature(state, minimax_depth):
     return (
         state,
@@ -640,6 +683,54 @@ def _refresh_pending_hero_decision():
         backend_session["minimax_depth"],
     )
     backend_session["pending_hero_signature"] = signature
+
+
+def _ghost_decision_signature(state, ghost_mcts_depth, ghost_mcts_iterations):
+    return (
+        state,
+        int(ghost_mcts_depth),
+        int(ghost_mcts_iterations),
+        hero_heuristic_multipliers["progress_bonus_multiplier"],
+        hero_heuristic_multipliers["distance_penalty_multiplier"],
+        hero_heuristic_multipliers["dot_reward_multiplier"],
+        hero_heuristic_multipliers["survival_bonus_multiplier"],
+        hero_heuristic_multipliers["mobility_bonus_multiplier"],
+        hero_heuristic_multipliers["danger_near_penalty_multiplier"],
+        hero_heuristic_multipliers["danger_mid_penalty_multiplier"],
+        tuple(hero_moves),
+        tuple(ghost1_moves),
+    )
+
+
+def _refresh_pending_ghost_decision():
+    state = backend_session.get("state")
+    if state is None:
+        backend_session["pending_ghost_decision"] = None
+        backend_session["pending_ghost_signature"] = None
+        return
+
+    if state.game_end or state.turn != "GHOST" or backend_session.get("stopped_by_user"):
+        backend_session["pending_ghost_decision"] = None
+        backend_session["pending_ghost_signature"] = None
+        return
+
+    signature = _ghost_decision_signature(
+        state,
+        backend_session["ghost_mcts_depth"],
+        backend_session["ghost_mcts_iterations"],
+    )
+    if (
+        backend_session.get("pending_ghost_decision") is not None
+        and backend_session.get("pending_ghost_signature") == signature
+    ):
+        return
+
+    backend_session["pending_ghost_decision"] = _compute_ghost_decision(
+        state,
+        backend_session["ghost_mcts_depth"],
+        backend_session["ghost_mcts_iterations"],
+    )
+    backend_session["pending_ghost_signature"] = signature
 
 
 def _minimax(state, depth, is_hero_turn, hero_turn_index=0, ghost_turn_index=0):
@@ -949,11 +1040,19 @@ def _step_game_state(state, minimax_depth, ghost_mcts_depth, ghost_mcts_iteratio
         }
 
     ghost_distance = _distance_for_turn("GHOST1", 0)
-    ghost_move = _mcts_ghost_move(
+    if backend_session.get("pending_ghost_decision") and backend_session.get("pending_ghost_signature") == _ghost_decision_signature(
         state,
-        max_depth=ghost_mcts_depth,
-        iterations=ghost_mcts_iterations,
-    )
+        ghost_mcts_depth,
+        ghost_mcts_iterations,
+    ):
+        ghost_move = tuple(backend_session["pending_ghost_decision"]["best_move"])
+    else:
+        fallback_ghost_decision = _compute_ghost_decision(
+            state,
+            ghost_mcts_depth,
+            ghost_mcts_iterations,
+        )
+        ghost_move = tuple(fallback_ghost_decision["best_move"])
     _ = get_next_move("GHOST1")
     next_hero_distance = _distance_for_turn("HERO", 0)
     next_state = move_ghost(state, ghost_move, next_hero_distance)
@@ -1050,6 +1149,9 @@ def _serialize_state(
     hero_move_evaluations=None,
     planned_hero_move=None,
     planned_hero_value=None,
+    ghost_move_evaluations=None,
+    planned_ghost_move=None,
+    planned_ghost_value=None,
 ):
     update_maze_from_state(state)
 
@@ -1071,6 +1173,9 @@ def _serialize_state(
     if hero_move_evaluations is None:
         hero_move_evaluations = _evaluate_hero_moves(state)
 
+    if ghost_move_evaluations is None and state.turn == "GHOST" and not state.game_end:
+        ghost_move_evaluations = []
+
     return {
         "maze_layout": maze_layout,
         "hero": list(state.hero),
@@ -1091,6 +1196,9 @@ def _serialize_state(
         "hero_move_evaluations": hero_move_evaluations,
         "planned_hero_move": planned_hero_move,
         "planned_hero_value": planned_hero_value,
+        "ghost_move_evaluations": ghost_move_evaluations,
+        "planned_ghost_move": planned_ghost_move,
+        "planned_ghost_value": planned_ghost_value,
         "hero_multipliers": {
             "progress_bonus_multiplier": hero_heuristic_multipliers["progress_bonus_multiplier"],
             "distance_penalty_multiplier": hero_heuristic_multipliers["distance_penalty_multiplier"],
@@ -1121,6 +1229,8 @@ backend_session = {
     "history": [],
     "pending_hero_decision": None,
     "pending_hero_signature": None,
+    "pending_ghost_decision": None,
+    "pending_ghost_signature": None,
 }
 
 
@@ -1162,6 +1272,8 @@ def _reset_backend_session(
     backend_session["history"] = []
     backend_session["pending_hero_decision"] = None
     backend_session["pending_hero_signature"] = None
+    backend_session["pending_ghost_decision"] = None
+    backend_session["pending_ghost_signature"] = None
 
 
 def _ensure_backend_session():
@@ -1182,7 +1294,9 @@ def _ensure_backend_session():
 
 def _serialize_backend_payload():
     _refresh_pending_hero_decision()
+    _refresh_pending_ghost_decision()
     pending = backend_session.get("pending_hero_decision") or {}
+    ghost_pending = backend_session.get("pending_ghost_decision") or {}
     return _serialize_state(
         backend_session["state"],
         backend_session["turn_count"],
@@ -1191,6 +1305,9 @@ def _serialize_backend_payload():
         pending.get("evaluations", []),
         pending.get("best_move"),
         pending.get("best_value"),
+        ghost_pending.get("evaluations", []),
+        ghost_pending.get("best_move"),
+        ghost_pending.get("best_value"),
     )
 
 
@@ -1341,6 +1458,8 @@ def create_app():
         backend_session["last_transition"] = transition
         backend_session["pending_hero_decision"] = None
         backend_session["pending_hero_signature"] = None
+        backend_session["pending_ghost_decision"] = None
+        backend_session["pending_ghost_signature"] = None
 
         payload = _serialize_backend_payload()
         return jsonify(payload)
@@ -1356,6 +1475,8 @@ def create_app():
         _restore_undo_snapshot(snapshot)
         backend_session["pending_hero_decision"] = None
         backend_session["pending_hero_signature"] = None
+        backend_session["pending_ghost_decision"] = None
+        backend_session["pending_ghost_signature"] = None
 
         payload = _serialize_backend_payload()
         return jsonify(payload)
