@@ -42,14 +42,14 @@ maze_layout = [
     "#.....#.....o.#",
     "#.###.#.###.#.#",
     "#.#.......#.#.#",
-    "#.#.#####.#.#.#",
+    "#.#.##.##.#.#.#",
     "#...#...#...#.#",
     "###...#...###.#",
-    "#...#.#.#.....#",
+    "#...#..o#.....#",
     "#.###.#.###.#.#",
     "#.....#.....#.#",
-    "#.#.#####.#.#.#",
-    "#o..#.....#..o#",
+    "#.#.#.###.#.#.#",
+    "#...#.....#..o#",
     "#.###.###.###.#",
     "#o....#.......#",
     "###############",
@@ -120,7 +120,7 @@ def _all_walkable_positions(layout):
     return walkable
 
 
-def _pick_spawn_positions(layout, preferred_hero=(23, 13), preferred_ghost=(11, 13)):
+def _pick_spawn_positions(layout, preferred_hero=(3, 1), preferred_ghost=(11, 11)):
     walkable = _all_walkable_positions(layout)
     if not walkable:
         raise ValueError("maze_layout has no walkable tiles (non-#).")

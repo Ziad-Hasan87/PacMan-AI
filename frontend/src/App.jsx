@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dotImg from "../assets/dot.png";
 import ghostImg from "../assets/ghost.png";
+import pacLogoImg from "../assets/paclogo.png";
 import pacmanImg from "../assets/pacman.png";
 import wallImg from "../assets/wall.png";
 
@@ -505,10 +506,12 @@ export default function App() {
       <div className="backdrop-orb orb-b" />
 
       <header className="header panel">
-        <div>
-          <p className="kicker">Agent Dashboard</p>
-          <h1>PacMan Simulation Control Room</h1>
-          <p className="subhead">Python backend computes turns. React sends continue/quit signals and renders live maze JSON.</p>
+        <div className="brand-block">
+          <img className="brand-logo" src={pacLogoImg} alt="PacMan logo" />
+          <div>
+            <p className="kicker">Agent Dashboard</p>
+            <h1>PacMan - A Phantom Menace</h1>
+          </div>
         </div>
         <div className={`status-pill ${statusTone}`}>
           {game?.game_end ? `Winner: ${game.winner || "None"}` : game?.stopped_by_user ? "Stopped" : "Running"}
@@ -516,6 +519,71 @@ export default function App() {
       </header>
 
       <section className="layout">
+        <aside className="left-rail">
+          <section className="panel metrics-grid">
+            <article className="metric-card">
+              <span className="metric-label">Turn</span>
+              <strong>{game?.turn_count ?? "-"}</strong>
+              <small>{game?.turn || "Unknown"}</small>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">Dots Remaining</span>
+              <strong>{game?.dots_remaining ?? "-"}</strong>
+              <small>Objective pellets left</small>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">PacMan Heuristic</span>
+              <strong>{formatHeuristicValue(game?.hero_heuristic, game?.winner, 2)}</strong>
+              <small>Higher is better for PacMan</small>
+            </article>
+            <article className="metric-card">
+              <span className="metric-label">Ghost Heuristic</span>
+              <strong>{formatHeuristicValue(game?.ghost_heuristic, game?.winner)}</strong>
+              <small>Higher is better for ghost</small>
+            </article>
+          </section>
+
+          <section className="panel status">
+            <h2>Live Status</h2>
+            {game ? (
+              <div className="status-grid">
+                <div className="status-row"><span>Current Turn</span><strong>{game.turn}</strong></div>
+                <div className="status-row"><span>Game End</span><strong>{String(game.game_end)}</strong></div>
+                <div className="status-row"><span>Winner</span><strong>{game.winner || "None"}</strong></div>
+                <div className="status-row"><span>Stopped By User</span><strong>{String(game.stopped_by_user)}</strong></div>
+                <div className="status-row"><span>Distance To Nearest Dot</span><strong>{game.nearest_dot_distance ?? "-"}</strong></div>
+                <div className="status-row"><span>Nearest Dot Position</span><strong>{formatPosition(game.nearest_dot_position)}</strong></div>
+                <div className="status-row"><span>PacMan Distance From Ghost</span><strong>{game.hero_distance_from_ghost ?? "-"}</strong></div>
+                <div className="status-row"><span>Ghost Distance From PacMan</span><strong>{game.ghost_distance_from_hero ?? "-"}</strong></div>
+                <div className="status-row"><span>Planned PacMan Move (Minimax)</span><strong>{formatPosition(game.planned_hero_move)}</strong></div>
+                <div className="status-row"><span>Planned PacMan Value</span><strong>{formatHeuristicValue(game.planned_hero_value, game.winner, 2)}</strong></div>
+                <div className="status-row"><span>Planned GHOST Move (MCTS)</span><strong>{formatPosition(game.planned_ghost_move)}</strong></div>
+                <div className="status-row"><span>Planned GHOST Value</span><strong>{formatHeuristicValue(game.planned_ghost_value, game.winner, 2)}</strong></div>
+                <div className="status-row wide">
+                  <span>Last Transition</span>
+                  <strong>
+                    {game.last_transition
+                      ? `${game.last_transition.actor} moved to [${game.last_transition.move?.join(", ")}]`
+                      : "None"}
+                  </strong>
+                </div>
+              </div>
+            ) : (
+              <p>No state loaded.</p>
+            )}
+
+            <div className="legend">
+              <h3>Legend</h3>
+              <div className="legend-grid">
+                <span><i className="dot" style={{ backgroundImage: `url(${wallImg})` }} /> Wall</span>
+                <span><i className="dot" style={{ backgroundImage: `url(${pacmanImg})` }} /> PacMan</span>
+                <span><i className="dot" style={{ backgroundImage: `url(${ghostImg})` }} /> Ghost</span>
+                <span><i className="dot" style={{ backgroundImage: `url(${dotImg})` }} /> Pellet</span>
+              </div>
+            </div>
+          </section>
+        </aside>
+
         <section className="panel board-panel">
           <div className="board-title-row">
             <h2>Maze Feed</h2>
@@ -557,7 +625,7 @@ export default function App() {
                         aria-label={`${displayChar === " " ? "floor" : displayChar} at row ${r}, col ${c}`}
                       >
                         {hasHeroHint ? (
-                          <span className="move-hint-label">{formatHeuristicValue(heroHintValue, Number(heroHintValue) >= 0 ? "HERO" : "GHOST", 1)}</span>
+                          <span className="move-hint-label">{formatHeuristicValue(heroHintValue, Number(heroHintValue) >= 0 ? "HERO" : "GHOST", 2)}</span>
                         ) : hasGhostHint ? (
                           <span className="move-hint-label">{formatHeuristicValue(ghostHintValue, Number(ghostHintValue) >= 0 ? "HERO" : "GHOST", 1)}</span>
                         ) : null}
@@ -579,7 +647,7 @@ export default function App() {
 
             <div className="config-grid">
               <label>
-                HERO Minimax Depth
+                PacMan Minimax Depth
                 <input
                   type="number"
                   min="1"
@@ -732,7 +800,7 @@ export default function App() {
                 onClick={() => setShowHeroMoves((prev) => !prev)}
                 disabled={loading || !game || game.turn !== "HERO" || game.game_end}
               >
-                {showHeroMoves ? "Hide Hero Moves" : "Show Hero Moves"}
+                {showHeroMoves ? "Hide PacMan Moves" : "Show PacMan Moves"}
               </button>
               <button
                 className={showGhostMoves ? "primary" : "ghost"}
@@ -748,69 +816,6 @@ export default function App() {
             </div>
 
             {error && <div className="error">{error}</div>}
-          </section>
-
-          <section className="metrics-grid">
-            <article className="panel metric-card">
-              <span className="metric-label">Turn</span>
-              <strong>{game?.turn_count ?? "-"}</strong>
-              <small>{game?.turn || "Unknown"}</small>
-            </article>
-            <article className="panel metric-card">
-              <span className="metric-label">Dots Remaining</span>
-              <strong>{game?.dots_remaining ?? "-"}</strong>
-              <small>Objective pellets left</small>
-            </article>
-            <article className="panel metric-card">
-              <span className="metric-label">Hero Heuristic</span>
-              <strong>{formatHeuristicValue(game?.hero_heuristic, game?.winner)}</strong>
-              <small>Higher is better for hero</small>
-            </article>
-            <article className="panel metric-card">
-              <span className="metric-label">Ghost Heuristic</span>
-              <strong>{formatHeuristicValue(game?.ghost_heuristic, game?.winner)}</strong>
-              <small>Higher is better for ghost</small>
-            </article>
-          </section>
-
-          <section className="panel status">
-            <h2>Live Status</h2>
-            {game ? (
-              <div className="status-grid">
-                <div className="status-row"><span>Current Turn</span><strong>{game.turn}</strong></div>
-                <div className="status-row"><span>Game End</span><strong>{String(game.game_end)}</strong></div>
-                <div className="status-row"><span>Winner</span><strong>{game.winner || "None"}</strong></div>
-                <div className="status-row"><span>Stopped By User</span><strong>{String(game.stopped_by_user)}</strong></div>
-                <div className="status-row"><span>Distance To Nearest Dot</span><strong>{game.nearest_dot_distance ?? "-"}</strong></div>
-                <div className="status-row"><span>Nearest Dot Position</span><strong>{formatPosition(game.nearest_dot_position)}</strong></div>
-                <div className="status-row"><span>Hero Distance From Ghost</span><strong>{game.hero_distance_from_ghost ?? "-"}</strong></div>
-                <div className="status-row"><span>Ghost Distance From Hero</span><strong>{game.ghost_distance_from_hero ?? "-"}</strong></div>
-                <div className="status-row"><span>Planned HERO Move (Minimax)</span><strong>{formatPosition(game.planned_hero_move)}</strong></div>
-                <div className="status-row"><span>Planned HERO Value</span><strong>{formatHeuristicValue(game.planned_hero_value, game.winner, 2)}</strong></div>
-                <div className="status-row"><span>Planned GHOST Move (MCTS)</span><strong>{formatPosition(game.planned_ghost_move)}</strong></div>
-                <div className="status-row"><span>Planned GHOST Value</span><strong>{formatHeuristicValue(game.planned_ghost_value, game.winner, 2)}</strong></div>
-                <div className="status-row wide">
-                  <span>Last Transition</span>
-                  <strong>
-                    {game.last_transition
-                      ? `${game.last_transition.actor} moved to [${game.last_transition.move?.join(", ")}]`
-                      : "None"}
-                  </strong>
-                </div>
-              </div>
-            ) : (
-              <p>No state loaded.</p>
-            )}
-
-            <div className="legend">
-              <h3>Legend</h3>
-              <div className="legend-grid">
-                <span><i className="dot" style={{ backgroundImage: `url(${wallImg})` }} /> Wall</span>
-                <span><i className="dot" style={{ backgroundImage: `url(${pacmanImg})` }} /> Hero</span>
-                <span><i className="dot" style={{ backgroundImage: `url(${ghostImg})` }} /> Ghost</span>
-                <span><i className="dot" style={{ backgroundImage: `url(${dotImg})` }} /> Pellet</span>
-              </div>
-            </div>
           </section>
         </aside>
       </section>

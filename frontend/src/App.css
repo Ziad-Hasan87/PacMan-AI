@@ -32,12 +32,20 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
 }
 
 .app {
-  max-width: 96vw;
-  margin: 0 auto;
-  padding: 18px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
   position: relative;
 }
 
@@ -83,7 +91,22 @@ body {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  margin-bottom: 12px;
+  flex: 0 0 auto;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.3));
 }
 
 .kicker {
@@ -282,6 +305,15 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.left-rail {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
 .metric-card {
   display: grid;
   gap: 2px;
@@ -304,15 +336,20 @@ button:disabled {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(340px, 420px);
   gap: 12px;
-  height: calc(100vh - 132px);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .right-rail {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .status h2,
@@ -382,6 +419,7 @@ button:disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .board-title-row {
@@ -598,11 +636,12 @@ button:disabled {
 
   .layout {
     grid-template-columns: 1fr;
-    height: auto;
+    overflow: auto;
   }
 
+  .left-rail,
   .right-rail {
-    grid-template-rows: auto;
+    overflow: visible;
   }
 
   .controls-title-row {
@@ -611,11 +650,11 @@ button:disabled {
   }
 
   .board-panel {
-    min-height: calc(100vh - 220px);
+    min-height: calc(100dvh - 260px);
   }
 
   .board-shell {
-    min-height: 420px;
+    min-height: 320px;
   }
 }
 
